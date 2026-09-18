@@ -148,8 +148,11 @@ mkdir -p baseline/x86
 # 1. Environment. -march=native is what the build actually uses, so record
 #    what it expands to. _mm256_cvtpd_epi64 (simd.hpp:1230) needs AVX512DQ
 #    + AVX512VL, so note whether those appear.
+# The working-tree state is sampled BEFORE the redirect opens env.txt, or
+# git status sees the file it is being written into and records that.
+SIMD_DIRTY=$(git status --short)
 {
-  echo "== commit =="; git rev-parse HEAD; git status --short
+  echo "== commit =="; git rev-parse HEAD; echo "$SIMD_DIRTY"
   echo "== g++ =="; g++ --version | head -1
   echo "== cmake =="; cmake --version | head -1
   echo "== cpu =="; lscpu | head -25
