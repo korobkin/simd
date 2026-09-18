@@ -254,10 +254,16 @@ int main() {
 	hdr("fma exactness (double-double building block)");
 	{
 		/* The operands must have a product that is NOT representable as a
-		   float, or there is no rounding error for the FMA to recover and the
-		   residual is legitimately zero. (1 +- 2^-12) fails that test:
-		   1 - 2^-24 is exactly representable. 2^-13 does not divide evenly. */
-		simd_f32 a(1.0f + 0x1p-13f), b(1.0f - 0x1p-11f);
+		   float, or there is no rounding error for the FMA to recover and a
+		   zero residual is the correct answer rather than a symptom.
+		   (1 + 2^-13)(1 - 2^-13) = 1 - 2^-26, which needs 26 bits below the
+		   leading one and so cannot be held in a float's 24-bit significand;
+		   it rounds to 1.0 and leaves a residual of -2^-26 = 0xb2800000.
+		   Verified against scalar fmaf(). Beware that merely making the
+		   exponents differ is not enough: (1 + 2^-12)(1 - 2^-12) = 1 - 2^-24
+		   and (1 + 2^-13)(1 - 2^-11) both land exactly on representable
+		   values and give a zero residual. */
+		simd_f32 a(1.0f + 0x1p-13f), b(1.0f - 0x1p-13f);
 		simd_f32 p = a * b;
 		simd_f32 err = fma(a, b, -p);
 		printf("a*b       = %08x\n", bits32(p[0]));

@@ -70,21 +70,65 @@ Decide deliberately which behaviour is wanted. If half-to-even is intended,
 that is defensible for numerical work, but the name should not be `round` — or
 it should be documented, since callers will reasonably assume libm semantics.
 
-## 4. The f32 FMA check in the semantics probe is a bad test — FIXED
+## 4. The f32 FMA check in the semantics probe is a bad test — FIXED, baseline re-capture pending
 
 `tools/baseline/semantics.cpp:260`.
 
-The comment asserts the residual "must be nonzero here". It is zero, and that
+The comment asserted the residual "must be nonzero here". It is zero, and that
 is correct: `(1 + 2^-12)*(1 - 2^-12) = 1 - 2^-24`, which is exactly
 representable as a float, so there is no rounding error for the FMA to recover.
 
 Not a library defect — the library is fine, and the f64 case immediately below
-does exercise the path properly, returning exactly `-2^-54`. Only the test
-input and its comment need changing: pick operands whose product is not
-representable, e.g. `1 + 2^-13` and `1 - 2^-13`.
+does exercise the path properly, returning exactly `-2^-54`.
 
-Flagged so nobody debugs the FMA implementation chasing this.
+Fixed 2026-09-17. Operands are now `1 + 2^-13` and `1 - 2^-13`, whose product
+`1 - 2^-26` needs 26 bits below the leading one and so does not fit a float's
+24-bit significand; it rounds to `1.0` and leaves a residual of `-2^-26`.
 
-Fixed 2026-09-17: operands changed to `1 + 2^-13` and `1 - 2^-11`, whose
-product is not representable, and the comment corrected. `semantics.txt` needs
-re-capturing on x86 for the two `fma exactness` lines to match.
+A first attempt used `1 + 2^-13` and `1 - 2^-11` and was wrong in the same way
+as the original — that product is `1 - 2^-11 + 2^-13 - 2^-24`, which is again
+exactly representable, and the residual was again zero. Worth remembering: it
+is not enough for the operands to have differing exponents, or for the product
+to *look* awkward. The test is whether the exact product needs more than 24
+significant bits. Check a candidate with scalar `fmaf()` before trusting it.
+
+### Re-capturing `baseline/x86/semantics.txt`
+
+Needed because the two `fma exactness` lines in the committed baseline come
+from the old operands. Run on the x86 machine, on this branch, with a clean
+tree:
+
+```bash
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j
+cd ..
+g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
+    tools/baseline/semantics.cpp -Lbuild -lsimd -o build/semantics
+./build/semantics > baseline/x86/semantics.txt
+```
+
+Expect **exactly two changed lines**, both in the `fma exactness` section:
+
+```diff
+-a*b       = 3f7fffff
+-fma(a,b,-p)= 00000000  (exact residual; must be nonzero here)
++a*b       = 3f800000
++fma(a,b,-p)= b2800000  (exact residual; nonzero for these operands)
+```
+
+Those two values are exact IEEE arithmetic, not platform-dependent; they were
+computed with scalar `fmaf()` on the AArch64 box and must come out identical on
+x86. The `f64 a*b` and `f64 resid` lines below them do not change.
+
+Confirm nothing else moved before committing:
+
+```bash
+git diff --numstat baseline/x86/semantics.txt   # expect: 2  2  baseline/x86/semantics.txt
+git status --short                              # expect: only that one file
+```
+
+Any other difference is a real behavioural change on the x86 side and should be
+explained before the file is committed — the whole point of the baseline is
+that it does not drift silently. `golden.txt` does not exercise `fma()`
+directly and is unaffected.
