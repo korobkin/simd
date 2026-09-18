@@ -37,10 +37,12 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 			list(APPEND SIMD_ARCH_FLAGS -mcpu=native)
 		endif()
 	endif()
-	message(STATUS
-		"simd: AArch64 detected; building the SIMDe backend (Phase 1). "
-		"See PORT-AARCH64.md."
-	)
+	if(NOT SIMD_NATIVE_NEON)
+		message(STATUS
+			"simd: AArch64 detected; building the SIMDe backend (Phase 1). "
+			"See PORT-AARCH64.md."
+		)
+	endif()
 else()
 	message(WARNING
 		"simd: unrecognised target architecture '${CMAKE_SYSTEM_PROCESSOR}'. "
@@ -87,8 +89,18 @@ find_package(Threads REQUIRED)
 # Phase 1 of the AArch64 port (PORT-AARCH64.md): SIMDe reimplements the Intel
 # intrinsics over NEON, keeping the AVX2 lane counts so nothing else has to
 # change yet. x86_64 uses <immintrin.h> and never sees this.
+# Phase 2: the native NEON backend, where the lane counts actually change to
+# 4 floats and 2 doubles. Off by default until it is finished.
+option(SIMD_NATIVE_NEON "Use the native NEON backend instead of SIMDe" OFF)
+if(SIMD_NATIVE_NEON AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+	message(FATAL_ERROR "simd: SIMD_NATIVE_NEON requires an AArch64 target.")
+endif()
+if(SIMD_NATIVE_NEON)
+	message(STATUS "simd: backend: native NEON (4 float / 2 double lanes)")
+endif()
+
 set(SIMDE_INCLUDE_DIRS "")
-if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
+if(NOT SIMD_NATIVE_NEON AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
 	find_path(SIMDE_INCLUDE_DIR NAMES simde/x86/avx2.h)
 	if(NOT SIMDE_INCLUDE_DIR)
 		# Header-only, so populate without adding it as a subproject.
@@ -135,6 +147,9 @@ target_compile_definitions(
 	simd_codegen PRIVATE SIMD_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_compile_options(simd_codegen PRIVATE -O3)
+if(SIMD_NATIVE_NEON)
+	target_compile_definitions(simd_codegen PRIVATE SIMD_NATIVE_NEON)
+endif()
 target_include_directories(
 	simd_codegen PRIVATE ${MPFR_INCLUDE_DIR} ${GMP_INCLUDE_DIR} ${SIMDE_INCLUDE_DIRS}
 )
@@ -166,6 +181,9 @@ target_include_directories(
 # 9. It is GCC's default, so pinning it changes nothing here, but Clang and
 # some distributions default differently and would quietly lose that accuracy.
 target_compile_options(simd PUBLIC ${SIMD_ARCH_FLAGS} -ffp-contract=fast)
+if(SIMD_NATIVE_NEON)
+	target_compile_definitions(simd PUBLIC SIMD_NATIVE_NEON)
+endif()
 set_target_properties(simd PROPERTIES PUBLIC_HEADER "include/simd.hpp")
 
 # simd_test inherits the architecture flags and the include directory from the

@@ -830,17 +830,17 @@ public:
 	}
 	inline simd_i64& operator&=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = backend::i32_and(v, other.v);
+		v = backend::i64_and(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator^=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = backend::i32_xor(v, other.v);
+		v = backend::i64_xor(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator|=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = backend::i32_or(v, other.v);
+		v = backend::i64_or(v, other.v);
 		return *this;
 	}
 	inline simd_i64 operator&&(const simd_i64& other) const {
@@ -882,19 +882,19 @@ public:
 	inline simd_i64 operator&(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = backend::i32_and(v, other.v);
+		result.v = backend::i64_and(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator^(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = backend::i32_xor(v, other.v);
+		result.v = backend::i64_xor(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator|(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = backend::i32_or(v, other.v);
+		result.v = backend::i64_or(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator>>(const simd_i64& other) const {

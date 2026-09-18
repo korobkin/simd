@@ -313,11 +313,16 @@ void float_funcs(FILE* fp) {
 			}
 		}
 		fprintf(fp, "\n");
+		/* Four branches per coefficient index, so one vector holds
+		   size()/4 of them: 2 on AVX2, 1 on NEON. The packing factor, the
+		   width of each emitted initializer and the number of index vectors
+		   all follow from it. See PORT-AARCH64.md. */
+		const int CPV = (int) simd::simd_f32::size() / 4;
 		fprintf(fp, "simd_f32 erf(simd_f32 x) {\n");
 		fprintf(fp, "\tstatic const simd_f32 co[] = {\n");
-		for (int n = 0; n < N; n += 2) {
+		for (int n = 0; n < N; n += CPV) {
 			fprintf(fp, "\t\t{");
-			for (int i = n; i < n + 2; i++) {
+			for (int i = n; i < n + CPV; i++) {
 				double c1, c2, c3, c4;
 				if (i < N) {
 					int m = i / 2;
@@ -336,13 +341,13 @@ void float_funcs(FILE* fp) {
 					c1 = c3 = c4 = c2 = 99.0;
 				}
 				fprintf(fp, "%.9e, %.9e, %.9e, %.9e", c1, c2, c3, c4);
-				if (i != n + 1) {
+				if (i != n + CPV - 1) {
 					fprintf(fp, ",");
 				}
 				fprintf(fp, " ");
 			}
 			fprintf(fp, "}");
-			if (n + 2 < N) {
+			if (n + CPV < N) {
 				fprintf(fp, ",");
 			}
 			fprintf(fp, "\n");
@@ -350,7 +355,11 @@ void float_funcs(FILE* fp) {
 		auto sqrtpi = sqrt(hiprec_real(4) * atan(hiprec_real(1)));
 		fprintf(fp, "\t};\n");
 		fprintf(fp, "\tsimd_f32 y, s, z, x2;\n");
-		fprintf(fp, "\tsimd_i32 i0, i1, l;\n");
+		fprintf(fp, "\tsimd_i32 l");
+		for (int k = 0; k < CPV; k++) {
+			fprintf(fp, ", i%i", k);
+		}
+		fprintf(fp, ";\n");
 		fprintf(fp, "\ts = copysign(simd_f32(1), x);\n");
 		fprintf(fp, "\tx = fabs(x);\n");
 		fprintf(fp, "\tx2 = x * x;\n");
@@ -360,14 +369,16 @@ void float_funcs(FILE* fp) {
 		fprintf(fp, "\ti0 = x * simd_f32(%.9e);\n", (double) (hiprec_real(M) / xmax));
 		fprintf(fp, "\ti0 += simd_i32(1);\n");
 		fprintf(fp, "\ti0 -= l;\n");
-		fprintf(fp, "\ti1 = i0 + simd_i32(4);\n");
+		for (int k = 1; k < CPV; k++) {
+			fprintf(fp, "\ti%i = i0 + simd_i32(%i);\n", k, 4 * k);
+		}
 		fprintf(fp, "\tx -= z * simd_f32(%.9e) * i0;\n", (double) (xmax / hiprec_real(M)));
 		fprintf(fp, "\tx -= z * simd_f32(%.9e);\n", (double) (xmax * hiprec_real(0.5) / hiprec_real(M)) - (double) (xmax / hiprec_real(M)));
 //		fprintf(fp, "\tx *= simd_f32(%.9e);\n",);
 //		fprintf(fp, "\tx = blend(x, x0, l);\n");
-		fprintf(fp, "\ty = co[%i].permute(i%i);\n", (N - 1) / 2, (N - 1) % 2);
+		fprintf(fp, "\ty = co[%i].permute(i%i);\n", (N - 1) / CPV, (N - 1) % CPV);
 		for (int n = N - 2; n >= 0; n--) {
-			fprintf(fp, "\ty = fma(y, x, co[%i].permute(i%i));\n", n / 2, n % 2);
+			fprintf(fp, "\ty = fma(y, x, co[%i].permute(i%i));\n", n / CPV, n % CPV);
 		}
 		fprintf(fp, "\treturn s * y;\n");
 		fprintf(fp, "}\n");
@@ -766,13 +777,20 @@ void float_funcs(FILE* fp) {
 			}
 		}
 		fprintf(fp, "\n");
+		/* Two branches per coefficient index, so a vector holds size()/2 of
+		   them: 4 on AVX2, 2 on NEON. See PORT-AARCH64.md. */
+		const int CPV = (int) simd::simd_f32::size() / 2;
 		fprintf(fp, "simd_f32 asin(simd_f32 x) {\n");
 		fprintf(fp, "\tsimd_f32 y, s, z, x0, x1;\n");
-		fprintf(fp, "\tsimd_i32 i0, i1, i2, i3;\n");
+		fprintf(fp, "\tsimd_i32 i0");
+		for (int k = 1; k < CPV; k++) {
+			fprintf(fp, ", i%i", k);
+		}
+		fprintf(fp, ";\n");
 		fprintf(fp, "\tstatic const simd_f32 co[] = {\n");
-		for (int n = 0; n < N; n += 4) {
+		for (int n = 0; n < N; n += CPV) {
 			fprintf(fp, "\t\t{");
-			for (int i = n; i < n + 4; i++) {
+			for (int i = n; i < n + CPV; i++) {
 				double c1, c2;
 				if (i < N) {
 					c1 = co1[i];
@@ -782,13 +800,13 @@ void float_funcs(FILE* fp) {
 					c2 = 99.0;
 				}
 				fprintf(fp, "%.9e, %.9e", c1, c2);
-				if (i != n + 3) {
+				if (i != n + CPV - 1) {
 					fprintf(fp, ",");
 				}
 				fprintf(fp, " ");
 			}
 			fprintf(fp, "}");
-			if (n + 4 < N) {
+			if (n + CPV < N) {
 				fprintf(fp, ",");
 			}
 			fprintf(fp, "\n");
@@ -801,12 +819,12 @@ void float_funcs(FILE* fp) {
 		fprintf(fp, "\tx0 = x;\n");
 		fprintf(fp, "\tx1 = simd_f32(%.9e) * z - simd_f32(1);\n", (double) (hiprec_real(2) / sqrt(hiprec_real(1) - z0)));
 		fprintf(fp, "\tx = blend(x0, x1, i0);\n");
-		fprintf(fp, "\ti1 = i0 + simd_i32(2);\n");
-		fprintf(fp, "\ti2 = i0 + simd_i32(4);\n");
-		fprintf(fp, "\ti3 = i0 + simd_i32(6);\n");
-		fprintf(fp, "\ty = co[%i].permute(i%i);\n", (N - 1) / 4, (N - 1) % 4);
+		for (int k = 1; k < CPV; k++) {
+			fprintf(fp, "\ti%i = i0 + simd_i32(%i);\n", k, 2 * k);
+		}
+		fprintf(fp, "\ty = co[%i].permute(i%i);\n", (N - 1) / CPV, (N - 1) % CPV);
 		for (int n = N - 2; n >= 0; n--) {
-			fprintf(fp, "\ty = fma(y, x, co[%i].permute(i%i));\n", n / 4, n % 4);
+			fprintf(fp, "\ty = fma(y, x, co[%i].permute(i%i));\n", n / CPV, n % CPV);
 		}
 		fprintf(fp, "\tz = simd_f32(%.9e) - y * z;\n", (double) (hiprec_real(2) * atan(hiprec_real(1))));
 		fprintf(fp, "\ty = blend(y, z, i0);\n");
@@ -1585,12 +1603,17 @@ void double_funcs(FILE* fp) {
 		fprintf(fp, "\tsimd_f64 y, s, z, w, x0, x1;\n");
 		fprintf(fp, "\tsimd_i64 i;\n");
 		fprintf(fp, "\tsize_t j;\n");
+		/* One row per possible lane mask, so 2^lanes of them, each row a
+		   vector wide. 16 rows of 4 on AVX2, 4 rows of 2 on NEON. The
+		   emission is driven by the lane count; see PORT-AARCH64.md. */
+		const int LANES = (int) simd::simd_f64::size();
+		const int NROWS = 1 << LANES;
 		fprintf(fp, "\tstatic const simd_f64 co[][%i] = {\n", N);
-		for (int bits = 0; bits < 16; bits++) {
+		for (int bits = 0; bits < NROWS; bits++) {
 			fprintf(fp, "\t\t{\n");
 			for (int n = 0; n < N; n++) {
 				fprintf(fp, "\t\t\t{");
-				for (int i = 0; i < 4; i++) {
+				for (int i = 0; i < LANES; i++) {
 					double c1;
 					if ((bits >> i) & 0x1) {
 						c1 = co2[n];
@@ -1598,7 +1621,7 @@ void double_funcs(FILE* fp) {
 						c1 = co1[n];
 					}
 					fprintf(fp, "%.17e", c1);
-					if (i != 3) {
+					if (i != LANES - 1) {
 						fprintf(fp, ", ");
 					}
 				}
@@ -1609,7 +1632,7 @@ void double_funcs(FILE* fp) {
 				fprintf(fp, "\n");
 			}
 			fprintf(fp, "\t\t}");
-			if (bits + 1 < 16) {
+			if (bits + 1 < NROWS) {
 				fprintf(fp, ",");
 			}
 			fprintf(fp, "\n");
