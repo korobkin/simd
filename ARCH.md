@@ -178,6 +178,10 @@ git add baseline/x86 && git commit -m "baseline: x86_64 reference run"
 
 ## Notes for re-running this
 
+- **Re-capture `env.txt` alongside whatever else changed.** It records the
+  commit the artifacts came from, and partial re-captures that touch only
+  `golden.txt` or `semantics.txt` leave it pointing at a state that no longer
+  matches its neighbours.
 - **Do not "fix" anything in `include/` or `src/` in the same pass.** The point
   is to record current behaviour, including the parts that look wrong; record
   them in [TODO.md](TODO.md) instead. If a fix does land, re-capture the

@@ -158,6 +158,16 @@ Worked around by overriding the three broken intrinsics in the SIMDe branch of
 `fmsub` forms as `fmadd` against a sign-flipped addend. Negation flips the sign
 bit rather than subtracting from zero, so `-0` and NaN payloads survive.
 
+**Worth reporting upstream, and not yet reported.** The bug is small, clearly
+bounded and has an obvious fix: `simde_mm256_fmadd_ps` already delegates to the
+fused 128-bit path under `SIMDE_NATURAL_VECTOR_SIZE_LE(128)`, and the other
+three want the same treatment. `simde_mm_fmsub_ps`/`_pd` need a NEON path too,
+since they currently have none. A reproducer is a single `fma(a, b, -a*b)` on
+values whose product is inexact -- the residual comes back zero where a true
+FMA recovers it, which is `tools/baseline/semantics.cpp`'s `fma exactness`
+section. The user-visible consequence here was `acosh(simd_f32)` at 170 ULP
+against 5, because double-double arithmetic silently loses its extra precision.
+
 With that in place the ARM build reproduces the x86 golden dump bit-for-bit
 except `rsqrt`. Revisit if SIMDe fixes this upstream — the override is guarded
 by nothing and will simply shadow a corrected implementation.

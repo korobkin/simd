@@ -37,12 +37,6 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 			list(APPEND SIMD_ARCH_FLAGS -mcpu=native)
 		endif()
 	endif()
-	if(NOT SIMD_NATIVE_NEON)
-		message(STATUS
-			"simd: AArch64 detected; building the SIMDe backend (Phase 1). "
-			"See PORT-AARCH64.md."
-		)
-	endif()
 else()
 	message(WARNING
 		"simd: unrecognised target architecture '${CMAKE_SYSTEM_PROCESSOR}'. "
@@ -100,14 +94,32 @@ find_package(Threads REQUIRED)
 # Phase 1 of the AArch64 port (PORT-AARCH64.md): SIMDe reimplements the Intel
 # intrinsics over NEON, keeping the AVX2 lane counts so nothing else has to
 # change yet. x86_64 uses <immintrin.h> and never sees this.
-# Phase 2: the native NEON backend, where the lane counts actually change to
-# 4 floats and 2 doubles. Off by default until it is finished.
-option(SIMD_NATIVE_NEON "Use the native NEON backend instead of SIMDe" OFF)
+# The native NEON backend, 4 float / 2 double lanes. Default ON for AArch64:
+# it matches the x86 reference on 42 of 48 functions with the six exceptions
+# understood, runs about 1.65x faster than the SIMDe route, and needs no
+# external dependency, where SIMDe has to be found or fetched. Turn it off with
+# -DSIMD_NATIVE_NEON=OFF to fall back to SIMDe.
+#
+# Note this makes simd_f32::size() 4 rather than 8 by default on AArch64. That
+# breaks nobody, AArch64 support being new in the same work, but code written
+# against the AVX2 widths needs checking -- see PORT-AARCH64.md.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+	set(SIMD_NATIVE_NEON_DEFAULT ON)
+else()
+	set(SIMD_NATIVE_NEON_DEFAULT OFF)
+endif()
+option(SIMD_NATIVE_NEON "Use the native NEON backend instead of SIMDe"
+       ${SIMD_NATIVE_NEON_DEFAULT})
 if(SIMD_NATIVE_NEON AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 	message(FATAL_ERROR "simd: SIMD_NATIVE_NEON requires an AArch64 target.")
 endif()
 if(SIMD_NATIVE_NEON)
 	message(STATUS "simd: backend: native NEON (4 float / 2 double lanes)")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+	message(STATUS
+		"simd: backend: SIMDe over NEON (8 float / 4 double lanes). The native "
+		"backend is faster; see PORT-AARCH64.md."
+	)
 endif()
 
 set(SIMDE_INCLUDE_DIRS "")

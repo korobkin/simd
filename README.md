@@ -17,15 +17,12 @@ Architectures: **x86_64**, requiring AVX2 and FMA, and **AArch64**, with two
 backends. Both reproduce the x86 results bit-for-bit apart from `rsqrt`, an
 implementation-defined approximation.
 
-- **Native NEON** (`-DSIMD_NATIVE_NEON=ON`) is the one to use. 4 float and
-  2 double lanes, and about 1.65x faster than the SIMDe build.
-- **SIMDe** is the default, and needs no `arm_neon.h` knowledge from callers.
-  It reimplements the Intel intrinsics over NEON, keeping the AVX2 lane counts,
-  so every 256-bit operation becomes two 128-bit ones. Correct, but slower.
-
-```bash
-   cmake .. -DCMAKE_BUILD_TYPE=Release -DSIMD_NATIVE_NEON=ON
-```
+- **Native NEON** is the default. 4 float and 2 double lanes, about 1.65x
+  faster than the alternative, and no external dependency.
+- **SIMDe** is the fallback, selected with `-DSIMD_NATIVE_NEON=OFF`. It
+  reimplements the Intel intrinsics over NEON, keeping the AVX2 lane counts, so
+  every 256-bit operation becomes two 128-bit ones. Correct, but slower, and it
+  has to be found or fetched.
 
 For the SIMDe backend, CMake looks for SIMDe and fetches it if absent; to use
 an existing checkout instead, add `-DSIMDE_INCLUDE_DIR=/path/to/simde`.
@@ -91,7 +88,7 @@ compile with the SIMD instruction set enabled. On x86_64:
 g++ -std=c++20 -march=native -mavx2 -I../include main.cpp -L. -lsimd
 ```
 
-On AArch64 with the native NEON backend, drop `-mavx2`:
+On AArch64, drop `-mavx2`:
 
 ```bash
 g++ -std=c++20 -march=native -DSIMD_NATIVE_NEON -I../include main.cpp -L. -lsimd
