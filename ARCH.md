@@ -163,14 +163,12 @@ cp build/generated_code/src/math.cpp baseline/x86/math.cpp
 #    a few GB; the numbers are statistical, so one run is enough.
 ./build/simd_test 2>&1 | tee baseline/x86/simd_test.txt
 
-# 4. The two probes.
-g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
-    tools/baseline/semantics.cpp -Lbuild -lsimd -o build/semantics
+# 4. The two probes. They are CMake targets, built by the `make` above, so
+#    they inherit the simd target's architecture flags, include directories
+#    and -fno-strict-aliasing. Do not compile them by hand: a hand-written
+#    g++ line drops those and the probes stop agreeing with the library.
 ./build/semantics > baseline/x86/semantics.txt
-
-g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
-    tools/baseline/golden.cpp -Lbuild -lsimd -o build/golden
-./build/golden > baseline/x86/golden.txt
+./build/golden    > baseline/x86/golden.txt
 
 # 5. Commit.
 git add baseline/x86 && git commit -m "baseline: x86_64 reference run"
