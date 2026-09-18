@@ -1,69 +1,14 @@
 #pragma once
 
-#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
-#include <immintrin.h>
+/* The vector primitives live in a per-architecture backend header; see
+   PORT-AARCH64.md. Everything below is written against that interface, so a
+   new architecture is a new backend rather than edits throughout this file. */
+#if defined(__aarch64__) && defined(SIMD_NATIVE_NEON)
+#include "simd_backend_neon.hpp"
 #else
-/* Phase 1 of the AArch64 port; see PORT-AARCH64.md. SIMDe reimplements the
-   Intel intrinsics on top of NEON and keeps the AVX2 lane counts, so the
-   coefficient packing in src/codegen.cpp, the generated math.cpp and the
-   buffer sizing in src/test.cpp all stay valid. A native NEON backend, where
-   the vector width actually changes, is Phase 2. */
-#define SIMDE_ENABLE_NATIVE_ALIASES
-#include <simde/x86/avx2.h>
-#include <simde/x86/fma.h>
-
-/* SIMDe's 256-bit FMA loses the fusion on NEON, which this library cannot
-   tolerate: simd_f32_2/simd_f64_2 implement double-double arithmetic, whose
-   two_product depends on fma(a,b,-a*b) recovering the exact rounding error.
-   Without a true FMA that residual is zero and the extra precision vanishes,
-   taking acosh, asinh, atanh, tgamma and everything built on them with it.
-
-   Of the four used here only simde_mm256_fmadd_ps delegates to the fused
-   128-bit path; simde_mm256_fmadd_pd, _fmsub_ps and _fmsub_pd all expand to a
-   separate multiply and add, rounding twice. simde_mm_fmsub_ps/pd are not
-   fused either, so only fmadd has a usable 128-bit building block.
-
-   Overridden below. Negation is done by flipping the sign bit rather than
-   subtracting from zero, so that -0 and NaN payloads survive exactly. */
-#undef _mm256_fmadd_pd
-static inline simde__m256d _mm256_fmadd_pd(simde__m256d a, simde__m256d b, simde__m256d c) {
-	return simde_mm256_set_m128d(
-		simde_mm_fmadd_pd(simde_mm256_extractf128_pd(a, 1),
-		                  simde_mm256_extractf128_pd(b, 1),
-		                  simde_mm256_extractf128_pd(c, 1)),
-		simde_mm_fmadd_pd(simde_mm256_extractf128_pd(a, 0),
-		                  simde_mm256_extractf128_pd(b, 0),
-		                  simde_mm256_extractf128_pd(c, 0)));
-}
-
-#undef _mm256_fmsub_pd
-static inline simde__m256d _mm256_fmsub_pd(simde__m256d a, simde__m256d b, simde__m256d c) {
-	return _mm256_fmadd_pd(a, b, simde_mm256_xor_pd(c, simde_mm256_set1_pd(-0.0)));
-}
-
-#undef _mm256_fmsub_ps
-static inline simde__m256 _mm256_fmsub_ps(simde__m256 a, simde__m256 b, simde__m256 c) {
-	/* simde_mm256_fmadd_ps is already fused; only the subtract form is not. */
-	return simde_mm256_fmadd_ps(a, b, simde_mm256_xor_ps(c, simde_mm256_set1_ps(-0.0f)));
-}
-
-#ifndef _mm256_cvtpd_epi64
-/* The one intrinsic used here that SIMDe does not provide: it is AVX512DQ+VL,
-   not AVX2, and compiles on x86 only because -march=native happens to supply
-   it. lround(simd_f64) is the only caller, and it passes a value that
-   _mm256_round_pd has already made an exact integer, so the truncating cast
-   below matches the round-to-nearest the real instruction performs. */
-static inline simde__m256i _mm256_cvtpd_epi64(simde__m256d a) {
-	simde_float64 t[4];
-	int64_t u[4];
-	simde_mm256_storeu_pd(t, a);
-	for (int i = 0; i < 4; i++) {
-		u[i] = (int64_t) t[i];
-	}
-	return simde_mm256_loadu_si256((const void*) u);
-}
+#include "simd_backend_x86.hpp"
 #endif
-#endif
+
 #include <limits>
 #include <type_traits>
 #include <mutex>
@@ -94,8 +39,8 @@ class simd_f32;
 
 class simd_i32 {
 	union {
-		__m256i v;
-		int w[8];
+		backend::i32v v;
+		int w[backend::i32_lanes];
 	};
 public:
 	simd_i32() = default;
@@ -114,7 +59,7 @@ public:
 	}
 	inline simd_i32(int a) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_set1_epi32(a);
+		v = backend::i32_set1(a);
 	}
 	inline simd_i32(const std::initializer_list<int>& list) {
 		CHECK_ALIGNMENT(this, 32);
@@ -125,43 +70,43 @@ public:
 	}
 	inline simd_i32& gather(const int* ptr, simd_i32 indices) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_i32gather_epi32(ptr, indices.v, sizeof(int));
+		v = backend::i32_gather(ptr, indices.v);
 		return *this;
 	}
 	inline simd_i32 permute(const simd_i32& indices) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_permutevar8x32_epi32(v, indices.v);
+		result.v = backend::i32_permute(v, indices.v);
 		return result;
 	}
 	inline simd_i32& operator+=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_add_epi32(v, other.v);
+		v = backend::i32_add(v, other.v);
 		return *this;
 	}
 	inline simd_i32& operator-=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_sub_epi32(v, other.v);
+		v = backend::i32_sub(v, other.v);
 		return *this;
 	}
 	inline simd_i32& operator*=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_mul_epi32(v, other.v);
+		v = backend::i32_mul(v, other.v);
 		return *this;
 	}
 	inline simd_i32& operator&=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_and_si256(v, other.v);
+		v = backend::i32_and(v, other.v);
 		return *this;
 	}
 	inline simd_i32& operator^=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_xor_si256(v, other.v);
+		v = backend::i32_xor(v, other.v);
 		return *this;
 	}
 	inline simd_i32& operator|=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_or_si256(v, other.v);
+		v = backend::i32_or(v, other.v);
 		return *this;
 	}
 	inline simd_i32 operator&&(const simd_i32& other) const {
@@ -185,87 +130,87 @@ public:
 	inline simd_i32 operator+(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_add_epi32(v, other.v);
+		result.v = backend::i32_add(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator-(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_sub_epi32(v, other.v);
+		result.v = backend::i32_sub(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator~() const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_andnot_si256(v, simd_i32(0xFFFFFFFF).v);
+		result.v = backend::i32_andnot(v, simd_i32(0xFFFFFFFF).v);
 		return result;
 	}
 	inline simd_i32 operator*(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_mul_epi32(v, other.v);
+		result.v = backend::i32_mul(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator&(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_and_si256(v, other.v);
+		result.v = backend::i32_and(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator^(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_xor_si256(v, other.v);
+		result.v = backend::i32_xor(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator|(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_or_si256(v, other.v);
+		result.v = backend::i32_or(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator>>(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_srlv_epi32(v, other.v);
+		result.v = backend::i32_srlv(v, other.v);
 		return result;
 	}
 	inline simd_i32 operator<<(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_sllv_epi32(v, other.v);
+		result.v = backend::i32_sllv(v, other.v);
 		return result;
 	}
 	inline simd_i32& operator>>=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_srlv_epi32(v, other.v);
+		v = backend::i32_srlv(v, other.v);
 		return *this;
 	}
 	inline simd_i32& operator<<=(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_sllv_epi32(v, other.v);
+		v = backend::i32_sllv(v, other.v);
 		return *this;
 	}
 	inline simd_i32 operator>>(int i) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_srli_epi32(v, i);
+		result.v = backend::i32_srli(v, i);
 		return result;
 	}
 	inline simd_i32 operator<<(int i) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_slli_epi32(v, i);
+		result.v = backend::i32_slli(v, i);
 		return result;
 	}
 	inline simd_i32& operator>>=(int i) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_srli_epi32(v, i);
+		v = backend::i32_srli(v, i);
 		return *this;
 	}
 	inline simd_i32& operator<<=(int i) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_slli_epi32(v, i);
+		v = backend::i32_slli(v, i);
 		return *this;
 	}
 	inline simd_i32 operator-() const {
@@ -279,7 +224,7 @@ public:
 	inline simd_i32 operator==(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_cmpeq_epi32(v, other.v);
+		result.v = backend::i32_cmpeq(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator!=(const simd_i32& other) const {
@@ -289,7 +234,7 @@ public:
 	inline simd_i32 operator>(const simd_i32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_cmpgt_epi32(v, other.v);
+		result.v = backend::i32_cmpgt(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator>=(const simd_i32& other) const {
@@ -305,7 +250,7 @@ public:
 		return simd_i32(1) - (*this > other);
 	}
 	inline static constexpr size_t size() {
-		return 8;
+		return (size_t) backend::i32_lanes;
 	}
 	inline simd_i32& pad(int n) {
 		CHECK_ALIGNMENT(this, 32);
@@ -339,19 +284,19 @@ public:
 };
 
 inline simd_i32 max(simd_i32 a, simd_i32 b) {
-	a.v = _mm256_max_epi32(a.v, b.v);
+	a.v = backend::i32_max(a.v, b.v);
 	return a;
 }
 
 inline simd_i32 min(simd_i32 a, simd_i32 b) {
-	a.v = _mm256_min_epi32(a.v, b.v);
+	a.v = backend::i32_min(a.v, b.v);
 	return a;
 }
 
 class simd_f32 {
 	union {
-		__m256 v;
-		float w[8];
+		backend::f32v v;
+		float w[backend::f32_lanes];
 	};
 public:
 	simd_f32() = default;
@@ -369,7 +314,7 @@ public:
 	}
 	inline simd_f32(float a) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_broadcast_ss(&a);
+		v = backend::f32_set1(a);
 	}
 	inline simd_f32(const std::initializer_list<float>& list) {
 		CHECK_ALIGNMENT(this, 32);
@@ -380,61 +325,61 @@ public:
 	}
 	inline simd_f32(const simd_i32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_cvtepi32_ps(other.v);
+		v = backend::f32_from_i32(other.v);
 	}
 	inline simd_f32& gather(const float* ptr, simd_i32 indices) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_i32gather_ps(ptr, indices.v, sizeof(float));
+		v = backend::f32_gather(ptr, indices.v);
 		return *this;
 	}
 	inline simd_f32 permute(const simd_i32& indices) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f32 result;
-		result.v = _mm256_permutevar8x32_ps(v, indices.v);
+		result.v = backend::f32_permute(v, indices.v);
 		return result;
 	}
 	inline simd_f32& operator+=(const simd_f32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_add_ps(v, other.v);
+		v = backend::f32_add(v, other.v);
 		return *this;
 	}
 	inline simd_f32& operator-=(const simd_f32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_sub_ps(v, other.v);
+		v = backend::f32_sub(v, other.v);
 		return *this;
 	}
 	inline simd_f32& operator*=(const simd_f32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_mul_ps(v, other.v);
+		v = backend::f32_mul(v, other.v);
 		return *this;
 	}
 	inline simd_f32& operator/=(const simd_f32& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_div_ps(v, other.v);
+		v = backend::f32_div(v, other.v);
 		return *this;
 	}
 	inline simd_f32 operator+(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f32 result;
-		result.v = _mm256_add_ps(v, other.v);
+		result.v = backend::f32_add(v, other.v);
 		return result;
 	}
 	inline simd_f32 operator-(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f32 result;
-		result.v = _mm256_sub_ps(v, other.v);
+		result.v = backend::f32_sub(v, other.v);
 		return result;
 	}
 	inline simd_f32 operator*(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f32 result;
-		result.v = _mm256_mul_ps(v, other.v);
+		result.v = backend::f32_mul(v, other.v);
 		return result;
 	}
 	inline simd_f32 operator/(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f32 result;
-		result.v = _mm256_div_ps(v, other.v);
+		result.v = backend::f32_div(v, other.v);
 		return result;
 	}
 	inline simd_f32 operator-() const {
@@ -448,41 +393,41 @@ public:
 	inline simd_i32 operator==(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_castps_si256(_mm256_cmp_ps(v, other.v, _CMP_EQ_OS));
+		result.v = backend::f32_cmp_eq(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator!=(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_castps_si256(_mm256_cmp_ps(v, other.v, _CMP_NEQ_OS));
+		result.v = backend::f32_cmp_neq(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator>(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_castps_si256(_mm256_cmp_ps(v, other.v, _CMP_GT_OS));
+		result.v = backend::f32_cmp_gt(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator>=(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_castps_si256(_mm256_cmp_ps(v, other.v, _CMP_GE_OS));
+		result.v = backend::f32_cmp_ge(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator<(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_castps_si256(_mm256_cmp_ps(v, other.v, _CMP_LT_OS));
+		result.v = backend::f32_cmp_lt(v, other.v);
 		return -result;
 	}
 	inline simd_i32 operator<=(const simd_f32& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i32 result;
-		result.v = _mm256_castps_si256(_mm256_cmp_ps(v, other.v, _CMP_LE_OS));
+		result.v = backend::f32_cmp_le(v, other.v);
 		return -result;
 	}
 	inline static constexpr size_t size() {
-		return 8;
+		return (size_t) backend::f32_lanes;
 	}
 	inline simd_f32& pad(int n) {
 		CHECK_ALIGNMENT(this, 32);
@@ -589,7 +534,7 @@ inline simd_f32 abs(simd_f32 x) {
 
 inline simd_f32 blend(simd_f32 a, simd_f32 b, simd_i32 mask) {
 	mask = -mask;
-	a.v = _mm256_blendv_ps(a.v, b.v, ((simd_f32&) mask).v);
+	a.v = backend::f32_blendv(a.v, b.v, ((simd_f32&) mask).v);
 	return a;
 }
 
@@ -617,12 +562,12 @@ inline simd_f32 asinh(simd_f32 x) {
 }
 
 inline simd_f32 fmax(simd_f32 a, simd_f32 b) {
-	a.v = _mm256_max_ps(a.v, b.v);
+	a.v = backend::f32_max(a.v, b.v);
 	return a;
 }
 
 inline simd_f32 fmin(simd_f32 a, simd_f32 b) {
-	a.v = _mm256_min_ps(a.v, b.v);
+	a.v = backend::f32_min(a.v, b.v);
 	return a;
 }
 
@@ -637,25 +582,25 @@ inline simd_f32 atanh(simd_f32 x) {
 
 inline simd_f32 round(simd_f32 x) {
 	simd_f32 result;
-	result.v = _mm256_round_ps(x.v, _MM_FROUND_TO_NEAREST_INT);
+	result.v = backend::f32_round_nearest(x.v);
 	return result;
 }
 
 inline simd_i32 lround(simd_f32 x) {
 	simd_i32 result;
-	result.v = _mm256_cvtps_epi32(_mm256_round_ps(x.v, _MM_FROUND_TO_NEAREST_INT));
+	result.v = backend::f32_to_i32_nearest(x.v);
 	return result;
 }
 
 inline simd_f32 floor(simd_f32 x) {
 	simd_f32 result;
-	result.v = _mm256_floor_ps(x.v);
+	result.v = backend::f32_floor(x.v);
 	return result;
 }
 
 inline simd_f32 ceil(simd_f32 x) {
 	simd_f32 result;
-	result.v = _mm256_ceil_ps(x.v);
+	result.v = backend::f32_ceil(x.v);
 	return result;
 }
 
@@ -664,30 +609,35 @@ inline simd_f32 fdim(simd_f32 x, simd_f32 y) {
 }
 
 inline float reduce_sum(simd_f32 x) {
-	float a[4];
-	for (int i = 0; i < 4; i++) {
-		a[i] = x.w[i] + x.w[i + 4];
+	constexpr int H = backend::f32_lanes / 2;
+	float a[H];
+	for (int i = 0; i < H; i++) {
+		a[i] = x.w[i] + x.w[i + H];
 	}
-	return a[0] + a[1] + a[2] + a[3];
+	float s = a[0];
+	for (int i = 1; i < H; i++) {
+		s += a[i];
+	}
+	return s;
 }
 
 inline simd_f32 fma(simd_f32 a, simd_f32 b, simd_f32 c) {
 	simd_f32 result;
-	result.v = _mm256_fmadd_ps(a.v, b.v, c.v);
+	result.v = backend::f32_fmadd(a.v, b.v, c.v);
 	return result;
 }
 
 inline simd_i32::simd_i32(const simd_f32& other) {
-	v = _mm256_cvtps_epi32(_mm256_round_ps(other.v, _MM_FROUND_TO_ZERO));
+	v = backend::f32_to_i32_zero(other.v);
 }
 
 inline simd_f32 sqrt(simd_f32 x) {
-	x.v = _mm256_sqrt_ps(x.v);
+	x.v = backend::f32_sqrt(x.v);
 	return x;
 }
 
 inline simd_f32 rsqrt(simd_f32 x) {
-	x.v = _mm256_rsqrt_ps(x.v);
+	x.v = backend::f32_rsqrt(x.v);
 	return x;
 }
 
@@ -763,7 +713,7 @@ inline simd_f32 hypot(simd_f32 x, simd_f32 y) {
 }
 
 inline simd_f32 trunc(simd_f32 x) {
-	x.v = _mm256_round_ps(x.v, _MM_FROUND_TO_ZERO);
+	x.v = backend::f32_round_zero(x.v);
 	return x;
 }
 
@@ -802,8 +752,8 @@ class simd_f64;
 
 class simd_i64 {
 	union {
-		__m256i v;
-		int64_t w[4];
+		backend::i64v v;
+		int64_t w[backend::i64_lanes];
 	};
 public:
 	simd_i64() = default;
@@ -822,7 +772,7 @@ public:
 	}
 	inline simd_i64(long long a) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_set_epi64x(a, a, a, a);
+		v = backend::i64_set1(a);
 	}
 	inline simd_i64(const std::initializer_list<long long>& list) {
 		CHECK_ALIGNMENT(this, 32);
@@ -833,32 +783,32 @@ public:
 	}
 	inline simd_i64& gather(const long long* ptr, simd_i64 indices) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_i64gather_epi64(ptr, indices.v, sizeof(long long));
+		v = backend::i64_gather(ptr, indices.v);
 		return *this;
 	}
 	inline simd_i64& operator+=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_add_epi64(v, other.v);
+		v = backend::i64_add(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator-=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_sub_epi64(v, other.v);
+		v = backend::i64_sub(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator&=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_and_si256(v, other.v);
+		v = backend::i32_and(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator^=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_xor_si256(v, other.v);
+		v = backend::i32_xor(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator|=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_or_si256(v, other.v);
+		v = backend::i32_or(v, other.v);
 		return *this;
 	}
 	inline simd_i64 operator&&(const simd_i64& other) const {
@@ -882,81 +832,81 @@ public:
 	inline simd_i64 operator+(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_add_epi64(v, other.v);
+		result.v = backend::i64_add(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator-(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_sub_epi64(v, other.v);
+		result.v = backend::i64_sub(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator~() const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_andnot_si256(v, simd_i64(0xFFFFFFFFFFFFFFFFLL).v);
+		result.v = backend::i64_andnot(v, simd_i64(0xFFFFFFFFFFFFFFFFLL).v);
 		return result;
 	}
 	inline simd_i64 operator&(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_and_si256(v, other.v);
+		result.v = backend::i32_and(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator^(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_xor_si256(v, other.v);
+		result.v = backend::i32_xor(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator|(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_or_si256(v, other.v);
+		result.v = backend::i32_or(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator>>(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_srlv_epi64(v, other.v);
+		result.v = backend::i64_srlv(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator<<(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_sllv_epi64(v, other.v);
+		result.v = backend::i64_sllv(v, other.v);
 		return result;
 	}
 	inline simd_i64 operator>>(long long i) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_srli_epi64(v, i);
+		result.v = backend::i64_srli(v, i);
 		return result;
 	}
 	inline simd_i64 operator<<(long long i) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_slli_epi64(v, i);
+		result.v = backend::i64_slli(v, i);
 		return result;
 	}
 	inline simd_i64& operator>>=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_srlv_epi64(v, other.v);
+		v = backend::i64_srlv(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator<<=(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_sllv_epi64(v, other.v);
+		v = backend::i64_sllv(v, other.v);
 		return *this;
 	}
 	inline simd_i64& operator>>=(unsigned long long i) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_srli_epi64(v, i);
+		v = backend::i64_srli(v, i);
 		return *this;
 	}
 	inline simd_i64& operator<<=(unsigned long long i) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_slli_epi64(v, i);
+		v = backend::i64_slli(v, i);
 		return *this;
 	}
 	inline simd_i64 operator-() const {
@@ -970,7 +920,7 @@ public:
 	inline simd_i64 operator==(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_cmpeq_epi64(v, other.v);
+		result.v = backend::i64_cmpeq(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator!=(const simd_i64& other) const {
@@ -980,7 +930,7 @@ public:
 	inline simd_i64 operator>(const simd_i64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_cmpgt_epi64(v, other.v);
+		result.v = backend::i64_cmpgt(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator>=(const simd_i64& other) const {
@@ -996,7 +946,7 @@ public:
 		return simd_i64(1) - (*this > other);
 	}
 	inline static constexpr size_t size() {
-		return 4;
+		return (size_t) backend::i64_lanes;
 	}
 	inline simd_i64& pad(int n) {
 		const int& e = size();
@@ -1029,8 +979,8 @@ public:
 
 class simd_f64 {
 	union {
-		__m256d v;
-		double w[4];
+		backend::f64v v;
+		double w[backend::f64_lanes];
 	};
 public:
 	simd_f64() = default;
@@ -1048,7 +998,7 @@ public:
 	}
 	inline simd_f64(double a) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_broadcast_sd(&a);
+		v = backend::f64_set1(a);
 	}
 	inline simd_f64(const std::initializer_list<double>& list) {
 		CHECK_ALIGNMENT(this, 32);
@@ -1071,57 +1021,57 @@ public:
 		   modulo the lane count as the builtin does. */
 		simd_f64 result;
 		for (int k = 0; k < (int) size(); k++) {
-			result.w[k] = w[indices[k] & 3];
+			result.w[k] = w[indices[k] & (backend::f64_lanes - 1)];
 		}
 		return result;
 	}
 	inline simd_f64& gather(const double* ptr, simd_i64 indices) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_i64gather_pd(ptr, indices.v, sizeof(double));
+		v = backend::f64_gather(ptr, indices.v);
 		return *this;
 	}
 	inline simd_f64& operator+=(const simd_f64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_add_pd(v, other.v);
+		v = backend::f64_add(v, other.v);
 		return *this;
 	}
 	inline simd_f64& operator-=(const simd_f64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_sub_pd(v, other.v);
+		v = backend::f64_sub(v, other.v);
 		return *this;
 	}
 	inline simd_f64& operator*=(const simd_f64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_mul_pd(v, other.v);
+		v = backend::f64_mul(v, other.v);
 		return *this;
 	}
 	inline simd_f64& operator/=(const simd_f64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v = _mm256_div_pd(v, other.v);
+		v = backend::f64_div(v, other.v);
 		return *this;
 	}
 	inline simd_f64 operator+(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f64 result;
-		result.v = _mm256_add_pd(v, other.v);
+		result.v = backend::f64_add(v, other.v);
 		return result;
 	}
 	inline simd_f64 operator-(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f64 result;
-		result.v = _mm256_sub_pd(v, other.v);
+		result.v = backend::f64_sub(v, other.v);
 		return result;
 	}
 	inline simd_f64 operator*(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f64 result;
-		result.v = _mm256_mul_pd(v, other.v);
+		result.v = backend::f64_mul(v, other.v);
 		return result;
 	}
 	inline simd_f64 operator/(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_f64 result;
-		result.v = _mm256_div_pd(v, other.v);
+		result.v = backend::f64_div(v, other.v);
 		return result;
 	}
 	inline simd_f64 operator-() const {
@@ -1135,41 +1085,41 @@ public:
 	inline simd_i64 operator==(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_castpd_si256(_mm256_cmp_pd(v, other.v, _CMP_EQ_OS));
+		result.v = backend::f64_cmp_eq(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator!=(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_castpd_si256(_mm256_cmp_pd(v, other.v, _CMP_NEQ_OS));
+		result.v = backend::f64_cmp_neq(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator>(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_castpd_si256(_mm256_cmp_pd(v, other.v, _CMP_GT_OS));
+		result.v = backend::f64_cmp_gt(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator>=(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_castpd_si256(_mm256_cmp_pd(v, other.v, _CMP_GE_OS));
+		result.v = backend::f64_cmp_ge(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator<(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_castpd_si256(_mm256_cmp_pd(v, other.v, _CMP_LT_OS));
+		result.v = backend::f64_cmp_lt(v, other.v);
 		return -result;
 	}
 	inline simd_i64 operator<=(const simd_f64& other) const {
 		CHECK_ALIGNMENT(this, 32);
 		simd_i64 result;
-		result.v = _mm256_castpd_si256(_mm256_cmp_pd(v, other.v, _CMP_LE_OS));
+		result.v = backend::f64_cmp_le(v, other.v);
 		return -result;
 	}
 	inline static constexpr size_t size() {
-		return 4;
+		return (size_t) backend::f64_lanes;
 	}
 	inline simd_f64& pad(int n) {
 		CHECK_ALIGNMENT(this, 32);
@@ -1258,7 +1208,7 @@ simd_f64 atan(simd_f64 x);
 
 inline simd_f64 blend(simd_f64 a, simd_f64 b, simd_i64 mask) {
 	mask = -mask;
-	a.v = _mm256_blendv_pd(a.v, b.v, ((simd_f64&) mask).v);
+	a.v = backend::f64_blendv(a.v, b.v, ((simd_f64&) mask).v);
 	return a;
 }
 
@@ -1295,42 +1245,42 @@ inline simd_f64 atan2(simd_f64 y, simd_f64 x) {
 }
 
 inline simd_f64 fmax(simd_f64 a, simd_f64 b) {
-	a.v = _mm256_max_pd(a.v, b.v);
+	a.v = backend::f64_max(a.v, b.v);
 	return a;
 }
 
 inline simd_f64 fmin(simd_f64 a, simd_f64 b) {
-	a.v = _mm256_min_pd(a.v, b.v);
+	a.v = backend::f64_min(a.v, b.v);
 	return a;
 }
 
 inline simd_f64 round(simd_f64 x) {
 	simd_f64 result;
-	result.v = _mm256_round_pd(x.v, _MM_FROUND_TO_NEAREST_INT);
+	result.v = backend::f64_round_nearest(x.v);
 	return result;
 }
 
 
 inline simd_i64 lround(simd_f64 x) {
 	simd_i64 result;
-	result.v = _mm256_cvtpd_epi64(_mm256_round_pd(x.v, _MM_FROUND_TO_NEAREST_INT));
+	result.v = backend::f64_to_i64_nearest(x.v);
 	return result;
 }
 
 inline simd_f64 trunc(simd_f64 x) {
-	x.v = _mm256_round_pd(x.v, _MM_FROUND_TO_ZERO);
+	x.v = backend::f64_round_zero(x.v);
 	return x;
 }
 
 inline simd_f64 floor(simd_f64 x) {
 	simd_f64 result;
-	result.v = _mm256_floor_pd(x.v);
+	result.v = backend::f64_floor(x.v);
 	return result;
 }
 
 inline simd_f64 ceil(simd_f64 x) {
 	simd_f64 result;
-	result.v = _mm256_ceil_pd(x.v);
+	result.v = backend::f64_ceil(x.v);
 	return result;
 }
 
@@ -1359,7 +1309,7 @@ inline simd_f64 ldexp(simd_f64 x, simd_i64 e) {
 
 inline simd_f64 fma(simd_f64 a, simd_f64 b, simd_f64 c) {
 	simd_f64 result;
-	result.v = _mm256_fmadd_pd(a.v, b.v, c.v);
+	result.v = backend::f64_fmadd(a.v, b.v, c.v);
 	return result;
 }
 
@@ -1376,7 +1326,7 @@ simd_f32 lgamma(simd_f32);
 simd_f32 tgamma(simd_f32);
 
 inline simd_f64 sqrt(simd_f64 x) {
-	x.v = _mm256_sqrt_pd(x.v);
+	x.v = backend::f64_sqrt(x.v);
 	return x;
 }
 
@@ -1454,39 +1404,39 @@ struct simd_f32_2 {
 	simd_f32 y;
 	static inline simd_f32_2 __attribute__((optimize("O3"))) quick_two_sum(simd_f32 a_, simd_f32 b_) {
 		simd_f32_2 r;
-		const __m256& a = a_.v;
-		const __m256& b = b_.v;
-		r.x.v = _mm256_add_ps(a, b);
-		r.y.v = _mm256_sub_ps(r.x.v, a);
-		r.y.v = _mm256_sub_ps(b, r.y.v);
+		const backend::f32v& a = a_.v;
+		const backend::f32v& b = b_.v;
+		r.x.v = backend::f32_add(a, b);
+		r.y.v = backend::f32_sub(r.x.v, a);
+		r.y.v = backend::f32_sub(b, r.y.v);
 		return r;
 
 	}
 	static inline simd_f32_2 __attribute__((optimize("O3"))) two_sum(simd_f32 a_, simd_f32 b_) {
 		simd_f32_2 r;
-		const __m256& a = a_.v;
-		const __m256& b = b_.v;
-		__m256& s = r.x.v;
-		__m256& e = r.y.v;
-		s = _mm256_add_ps(a, b);
-		const __m256 v = _mm256_sub_ps(s, a);
-		e = _mm256_sub_ps(s, v);
-		e = _mm256_add_ps(_mm256_sub_ps(a, e), _mm256_sub_ps(b, v));
+		const backend::f32v& a = a_.v;
+		const backend::f32v& b = b_.v;
+		backend::f32v& s = r.x.v;
+		backend::f32v& e = r.y.v;
+		s = backend::f32_add(a, b);
+		const backend::f32v v = backend::f32_sub(s, a);
+		e = backend::f32_sub(s, v);
+		e = backend::f32_add(backend::f32_sub(a, e), backend::f32_sub(b, v));
 		return r;
 	}
 	static inline simd_f32_2 __attribute__((optimize("O3"))) two_product(simd_f32 a_, simd_f32 b_) {
 		simd_f32_2 r;
-		const __m256& a = a_.v;
-		const __m256& b = b_.v;
-		r.x.v = _mm256_mul_ps(a, b);
-		r.y.v = _mm256_fmsub_ps(a, b, r.x.v);
+		const backend::f32v& a = a_.v;
+		const backend::f32v& b = b_.v;
+		r.x.v = backend::f32_mul(a, b);
+		r.y.v = backend::f32_fmsub(a, b, r.x.v);
 		return r;
 	}
 public:
 	inline simd_f32_2& operator=(simd_f32 a) {
 		const static float zero = 0.0;
 		x = a;
-		y.v = _mm256_broadcast_ss(&zero);
+		y.v = backend::f32_set1(zero);
 		return *this;
 	}
 	inline simd_f32_2(simd_f32 a, simd_f32 b) {
@@ -1586,39 +1536,39 @@ struct simd_f64_2 {
 	simd_f64 y;
 	static inline simd_f64_2 __attribute__((optimize("O3"))) quick_two_sum(simd_f64 a_, simd_f64 b_) {
 		simd_f64_2 r;
-		const __m256d& a = a_.v;
-		const __m256d& b = b_.v;
-		r.x.v = _mm256_add_pd(a, b);
-		r.y.v = _mm256_sub_pd(r.x.v, a);
-		r.y.v = _mm256_sub_pd(b, r.y.v);
+		const backend::f64v& a = a_.v;
+		const backend::f64v& b = b_.v;
+		r.x.v = backend::f64_add(a, b);
+		r.y.v = backend::f64_sub(r.x.v, a);
+		r.y.v = backend::f64_sub(b, r.y.v);
 		return r;
 
 	}
 	static inline simd_f64_2 __attribute__((optimize("O3"))) two_sum(simd_f64 a_, simd_f64 b_) {
 		simd_f64_2 r;
-		const __m256d& a = a_.v;
-		const __m256d& b = b_.v;
-		__m256d& s = r.x.v;
-		__m256d& e = r.y.v;
-		s = _mm256_add_pd(a, b);
-		const __m256d v = _mm256_sub_pd(s, a);
-		e = _mm256_sub_pd(s, v);
-		e = _mm256_add_pd(_mm256_sub_pd(a, e), _mm256_sub_pd(b, v));
+		const backend::f64v& a = a_.v;
+		const backend::f64v& b = b_.v;
+		backend::f64v& s = r.x.v;
+		backend::f64v& e = r.y.v;
+		s = backend::f64_add(a, b);
+		const backend::f64v v = backend::f64_sub(s, a);
+		e = backend::f64_sub(s, v);
+		e = backend::f64_add(backend::f64_sub(a, e), backend::f64_sub(b, v));
 		return r;
 	}
 	static inline simd_f64_2 __attribute__((optimize("O3"))) two_product(simd_f64 a_, simd_f64 b_) {
 		simd_f64_2 r;
-		const __m256d& a = a_.v;
-		const __m256d& b = b_.v;
-		r.x.v = _mm256_mul_pd(a, b);
-		r.y.v = _mm256_fmsub_pd(a, b, r.x.v);
+		const backend::f64v& a = a_.v;
+		const backend::f64v& b = b_.v;
+		r.x.v = backend::f64_mul(a, b);
+		r.y.v = backend::f64_fmsub(a, b, r.x.v);
 		return r;
 	}
 public:
 	inline simd_f64_2& operator=(simd_f64 a) {
 		const static double zero = 0.0;
 		x = a;
-		y.v = _mm256_broadcast_sd(&zero);
+		y.v = backend::f64_set1(zero);
 		return *this;
 	}
 	inline simd_f64_2(simd_f64 a, simd_f64 b) {
@@ -1771,11 +1721,16 @@ inline simd_f64 fdim(simd_f64 x, simd_f64 y) {
 }
 
 inline double reduce_sum(simd_f64 x) {
-	double a[2];
-	for (int i = 0; i < 2; i++) {
-		a[i] = x.w[i] + x.w[i + 2];
+	constexpr int H = backend::f64_lanes / 2;
+	double a[H];
+	for (int i = 0; i < H; i++) {
+		a[i] = x.w[i] + x.w[i + H];
 	}
-	return a[0] + a[1];
+	double s = a[0];
+	for (int i = 1; i < H; i++) {
+		s += a[i];
+	}
+	return s;
 }
 
 }
