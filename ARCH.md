@@ -1,10 +1,16 @@
 # Architecture support
 
-This library is x86_64-only. `include/simd.hpp` includes `<immintrin.h>` and
+> **Status.** The survey below describes the situation before the AArch64 port
+> started. As of Phase 1 the library builds and runs on AArch64 through SIMDe,
+> reproducing the x86 reference dump bit-for-bit except `rsqrt`. A native NEON
+> backend is Phase 2. See [PORT-AARCH64.md](PORT-AARCH64.md); the analysis here
+> is kept because it is still the reasoning behind that plan.
+
+Originally this library was x86_64-only. `include/simd.hpp` includes `<immintrin.h>` and
 uses 32 `__m256`/`__m128` types and ~150 `_mm*` intrinsics, with no alternative
 code path; `CMakeLists.txt` passes `-march=native -mavx2` unconditionally.
 
-On AArch64 that fails immediately:
+On AArch64 that failed immediately:
 
 ```
 include/simd.hpp:3:10: fatal error: immintrin.h: No such file or directory

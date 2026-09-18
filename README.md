@@ -13,10 +13,20 @@ types in C.
 
 ## Installation
 
-This library is **x86_64-only**: it requires AVX2 and FMA. There is no ARM
-build yet -- see [ARCH.md](ARCH.md) for why and [PORT-AARCH64.md](PORT-AARCH64.md)
-for the plan. Configuring on AArch64 now succeeds, but the compile stops at
-`<immintrin.h>`.
+Architectures: **x86_64** natively, requiring AVX2 and FMA, and **AArch64**
+through [SIMDe](https://github.com/simd-everywhere/simde), which reimplements
+the Intel intrinsics over NEON. The ARM build is correct -- it reproduces the
+x86 results bit-for-bit apart from `rsqrt`, an implementation-defined
+approximation -- but makes no speed claim, since every 256-bit operation
+becomes two 128-bit ones. A native NEON backend is planned; see
+[PORT-AARCH64.md](PORT-AARCH64.md).
+
+On AArch64, CMake looks for SIMDe and fetches it if absent. To use an existing
+checkout instead:
+
+```bash
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DSIMDE_INCLUDE_DIR=/path/to/simde
+```
 
 Prerequisites:
  - gmp, gmp-devel library;
@@ -66,15 +76,22 @@ representation).
 ## Usage
 
 Everything lives in namespace `simd`. Include `simd.hpp`, link `libsimd`, and
-compile with the SIMD instruction set enabled -- on x86_64:
+compile with the SIMD instruction set enabled. On x86_64:
 
 ```bash
 g++ -std=c++20 -march=native -mavx2 -I../include main.cpp -L. -lsimd
 ```
 
+On AArch64, drop `-mavx2` and add the SIMDe include path:
+
+```bash
+g++ -std=c++20 -march=native -I../include -I/path/to/simde main.cpp -L. -lsimd
+```
+
 From CMake, link the `simd::simd` target, which already carries the include
 directory and the instruction-set flags chosen for the target architecture
-(`-march=native -mavx2` on x86_64):
+(`-march=native -mavx2` on x86_64, `-march=native` plus the SIMDe include
+path on AArch64):
 
 ```cmake
 add_subdirectory(external/simd)

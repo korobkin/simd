@@ -113,8 +113,8 @@ quietly adopt the IEEE reading.
   `vshlq_s32` is arithmetic, so the port must use the unsigned form to match.
 
 [TODO.md](TODO.md) is the register for defects found and deliberately not
-fixed. Two are open, and **item 3 should be settled before Phase 0 rather than
-after**:
+fixed. Two are open, and both are **deferred until after the port** by
+decision:
 
 - `ilogb` is wrong for negative inputs (`ilogb(-7.25)` returns 258). Isolated:
   nothing in the generated code calls it, so fixing it changes `semantics.txt`
@@ -124,13 +124,18 @@ after**:
   argument reduction of `sin`, `cos`, `exp` and `tgamma`. Changing it changes
   those four functions at exact half-integers.
 
-That second one is a decision, not a fix -- half-to-even is defensible for
-argument reduction, and the cheap outcome is to keep the behaviour and rename
-or document it. What matters for the port is that the decision is made while
-there is one architecture to re-capture instead of two. Random-sample dumps
-make this easy to get wrong: exact half-integers essentially never come up in
-512 random draws, so `golden.txt` may not move at all while the behaviour
-has in fact changed.
+Deferring `round` is affordable but not free, and it leaves a live trap in
+Phase 2: `vrndaq_f32` is the instruction a function called `round` invites, and
+substituting it would change four transcendentals. **The port must therefore
+reproduce the current behaviour exactly -- `vrndnq_f32` -- and any change to it
+is a separate, deliberate commit, not a side effect of the port.**
+
+What makes this safe to defer is that `semantics.txt` already pins it: the
+probe covers +-0.5, +-1.5 and +-2.5, so a ties-behaviour change moves four rows
+of that file. `golden.txt` would not catch it -- exact half-integers
+essentially never appear in 512 random draws, so the dump can be unchanged
+while the behaviour has changed. That is why the Phase 2 validation below
+diffs both files and not just the golden dump.
 
 ## Strategy
 
@@ -173,8 +178,8 @@ correct before touching it. But this is a judgement call, not a constraint.
 
 ```
 Phase -1  x86 baseline capture   -> DONE; baseline/x86/
-Phase 0   build unblock          -> cmake configures and builds on ARM
-Phase 1   SIMDe backend          -> correct ARM build, AVX2 lane counts
+Phase 0   build unblock          -> DONE; cmake configures per architecture
+Phase 1   SIMDe backend          -> DONE; baseline/aarch64-simde/
 Phase 2   native NEON backend    -> diffed against baseline/x86/golden.txt
 Phase 3   SVE (optional)         -> only worthwhile on wider hardware
 ```
@@ -202,39 +207,79 @@ mpfr -- only `simd_codegen` and `simd_test` do.
 dependent, keyed on `CMAKE_SYSTEM_PROCESSOR`, and update the two `-march=native
 -mavx2` examples in the README's Usage section to match.
 
-## Phase 1 -- SIMDe backend
+## Phase 1 -- SIMDe backend -- DONE
 
-Vendor SIMDe (header-only) and swap the include:
+The library, the generator and `simd_test` all build and run on AArch64. The
+include is switched per architecture, so x86 never sees SIMDe:
 
 ```c
-#include <simde/x86/avx2.h>
+#if defined(__x86_64__) || ...
+#include <immintrin.h>
+#else
 #define SIMDE_ENABLE_NATIVE_ALIASES
+#include <simde/x86/avx2.h>
+#include <simde/x86/fma.h>
+#endif
 ```
 
-Expect a small, contained set of fixes beyond the swap:
+CMake finds SIMDe with `find_path`, falling back to fetching v0.8.2, and
+`-DSIMDE_INCLUDE_DIR=` overrides both.
 
-- **`v[i]` subscripting (18 sites).** `simd_f32`/`simd_f64` store a bare
-  `__m256`/`__m256d` and index it with the GCC vector-subscript extension.
-  SIMDe's `simde__m256` is a union type and is not subscriptable. Fix by giving
-  those two classes the same `union { ...; float w[8]; }` layout `simd_i32`
-  already has -- which is tidier than the status quo anyway.
-- **`reduce_sum`** (`simd.hpp:587`, `:1684`) reinterprets the vector as two
-  `__m128` halves via pointer arithmetic. Rewrite over the union.
-- **`_mm256_cvtpd_epi64`** -- verify SIMDe's AVX512DQ/VL coverage includes it;
-  if not, emulate (2 lanes, trivial).
-- **Verify `_mm256_i32gather_ps`, `_mm256_i64gather_pd`,
-  `_mm256_permutevar8x32_ps/_epi32`** are covered. These are the ones the
-  generated code leans on hardest.
+**Result: the ARM build reproduces `baseline/x86/golden.txt` bit-for-bit for
+47 of 48 functions.** The exception is `f32 rsqrt`, which was predicted:
+`_mm256_rsqrt_ps` is a ~12-bit reciprocal estimate whose result is
+implementation-defined, so x86 and NEON simply give different approximations.
+All 512 samples differ, by at most 3928 ULP -- about 9e-5 relative, within
+spec for both. Nothing else in the library uses `rsqrt`, which is why no other
+function moved.
 
-The 32-byte type punning (`(simd_i32&) x`, used pervasively) stays valid
-because SIMDe keeps the 32-byte object size.
+`semantics.txt` differs in exactly one place, `alignof` reporting 16 rather
+than 32 (below). `simd_test`'s accuracy columns match x86 across the board.
+Speed is a different story -- many double-precision cases now run slower than
+scalar, which is expected when every 256-bit operation is two 128-bit ones.
+Phase 1 makes no speed claim.
 
-**Exit criterion:** `simd_test` runs, and `golden` and `semantics` rebuilt on
-ARM reproduce `baseline/x86/golden.txt` and `baseline/x86/semantics.txt`.
-Since SIMDe keeps 8 lanes and emulates AVX2 semantics, these should match
-very closely -- `rsqrt` is the expected exception (reciprocal estimate
-instructions are implementation-defined). Any other mismatch is a SIMDe
-coverage gap worth understanding before moving on.
+### What had to be fixed beyond the include swap
+
+- **SIMDe's 256-bit FMA is not fused on NEON.** Three of the four FMA
+  intrinsics used here expand to a separate multiply and add, which destroys
+  the double-double arithmetic in `simd_f32_2`/`simd_f64_2` and took `acosh`
+  from 5 ULP to 170. Overridden in the SIMDe branch; see TODO item 5. This was
+  the whole value of the phase -- it is a subtle, silent, high-consequence
+  failure, and it surfaced here for the cost of a header swap rather than in
+  the middle of a hand-written NEON backend.
+- **`v[i]` subscripting (20 sites).** `simd_f32`/`simd_f64` stored a bare
+  `__m256`/`__m256d` and indexed it with the GCC vector-subscript extension,
+  which `simde__m256` does not support. Both classes now carry the same
+  `union { __m256 v; float w[8]; }` layout `simd_i32` always had.
+- **`reduce_sum`** reinterpreted the vector as two `__m128` halves through
+  pointer arithmetic. Rewritten over the union, preserving the summation order
+  exactly -- a different order rounds differently and would have moved the
+  baseline.
+- **`simd_f64::permute`** used `__builtin_shuffle`, which needs a GCC vector
+  type. Written out as the equivalent loop.
+- **`_mm256_cvtpd_epi64`** is the one intrinsic of the 70 that SIMDe does not
+  provide, exactly as predicted -- it is AVX512DQ+VL, not AVX2. Emulated for
+  its single caller, `lround(simd_f64)`.
+- **`CHECK_ALIGNMENT`** hardcoded 32 at all 128 sites, and SIMDe's types are
+  16-byte aligned, so every debug build would have aborted immediately. The
+  macro now takes the alignment from the pointee and ignores the argument,
+  which fixes all 128 sites at once and is correct for Phase 2 as well. This
+  was listed below as width fallout; it is done.
+- **`src/test.cpp`** had its own vestigial `#include <immintrin.h>`, removed;
+  it uses no intrinsics directly.
+
+### Known differences from the x86 baseline
+
+Both are expected and neither indicates a defect:
+
+| where | x86 | AArch64/SIMDe | why |
+|---|---|---|---|
+| `semantics.txt`, `alignof` | 32 | 16 | SIMDe's 256-bit types are two 128-bit NEON vectors; `sizeof` is still 32 |
+| `golden.txt`, `f32 rsqrt` | -- | differs, <= 3928 ULP | reciprocal estimate, implementation-defined on both |
+
+`baseline/x86/golden.txt` remains the canonical oracle for Phase 2; the ARM
+dump is not committed because it is identical to it apart from `rsqrt`.
 
 ## Phase 2 -- native NEON backend
 
@@ -284,10 +329,22 @@ works natively.
   should be noted in the commit rather than faithfully reproduced.
 
 **Then the width fallout:** the codegen packing (section 1 above),
-`CHECK_ALIGNMENT` (section 2), `N_bit_shift` and the `posix_memalign(..., 32,
-...)` calls in `src/test.cpp`.
+`N_bit_shift` and the `posix_memalign(..., 32, ...)` calls in `src/test.cpp`.
+`CHECK_ALIGNMENT` (section 2) was already dealt with in Phase 1.
 
-**Validation:** rebuild `golden` and diff against `baseline/x86/golden.txt`.
+Note that Phase 1's FMA workaround goes away here: a native backend calls
+`vfmaq_f32`/`vfmaq_f64` directly, so the fusion is explicit rather than
+something to be checked for. The semantics probe's `fma exactness` section is
+what catches a regression.
+
+**Validation:** rebuild **both** probes and diff against
+`baseline/x86/golden.txt` and `baseline/x86/semantics.txt`. Diffing only the
+golden dump is not sufficient: it is built from random samples, so behaviour
+that differs on special values -- rounding ties, signed zero, NaN, denormals --
+can change without moving a single line of it. `semantics.txt` is the file that
+pins those, and it is where a wrong rounding-mode choice (see TODO item 3) or
+a lost comparison negation would surface.
+
 The per-element output format means the 4-lane ARM run and the 8-lane x86 run
 produce directly comparable files. Lane-masking and FMA contraction
 differences show up as small ULP deltas -- expected; large ones are bugs. The
@@ -307,11 +364,11 @@ just a backend change.
 | Phase | Scope | Rough cost |
 |---|---|---|
 | -1 | x86 baseline capture | done |
-| 0 | CMake: find mpfr/gmp, arch-conditional flags; README | small |
-| 1 | SIMDe: swap header, union layout, `reduce_sum`, verify coverage | moderate |
+| 0 | CMake: find mpfr/gmp, arch-conditional flags; README | done |
+| 1 | SIMDe: swap header, union layout, `reduce_sum`, FMA fusion | done |
 | 2 | Native NEON: 4 classes, 70 intrinsics, codegen re-parameterisation | the bulk |
 | 3 | SVE | defer |
 
-Phases -1 to 1 give a correct, tested ARM build with no speedup claim. Phase 2 is
-where performance arrives, and it is the only phase that touches the code
-generator.
+Phases -1 to 1 are complete: there is a correct, tested ARM build, making no
+speedup claim. Phase 2 is where performance arrives, and it is the only phase
+that touches the code generator.

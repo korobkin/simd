@@ -54,7 +54,7 @@ into the exponent field. Masking the magnitude before the shift
 time, and worth confirming against a denormal, which this sequence also does
 not handle.
 
-## 3. `round` rounds half to even, unlike libm
+## 3. `round` rounds half to even, unlike libm — DEFERRED
 
 `include/simd.hpp:559` (f32), `:1221` (f64).
 
@@ -69,6 +69,21 @@ no single AVX intrinsic for half-away-from-zero; the usual construction is
 Decide deliberately which behaviour is wanted. If half-to-even is intended,
 that is defensible for numerical work, but the name should not be `round` — or
 it should be documented, since callers will reasonably assume libm semantics.
+
+Deferred until after the AArch64 port (decided 2026-09-17). Until then the
+current behaviour is the specification: the NEON backend must use `vrndnq_f32`
+(ties to even), **not** `vrndaq_f32` (ties away), even though the latter is
+what the name `round` suggests. Substituting it would silently change `sin`,
+`cos`, `exp` and `tgamma` through their argument reduction.
+
+`semantics.txt` guards this — it covers `±0.5`, `±1.5` and `±2.5`, so a
+ties-behaviour change moves four of its rows. `golden.txt` does not: its random
+samples essentially never land on an exact half-integer. Diff both when
+validating a port.
+
+When this is eventually settled, the cost is a re-capture of `golden.txt` on
+x86 *and* a re-verification on the ARM build, rather than the single re-capture
+it would have taken before the port.
 
 ## 4. The f32 FMA check in the semantics probe is a bad test — FIXED
 
@@ -107,3 +122,56 @@ Nothing else in the file moved, so no x86 behaviour changed alongside it. The
 `f64` lines below are unaffected, as is `golden.txt`, which does not exercise
 `fma()` directly. The general re-capture procedure lives in
 [ARCH.md](ARCH.md).
+
+## 5. SIMDe's 256-bit FMA is not fused on NEON — WORKED AROUND
+
+`include/simd.hpp`, the SIMDe branch at the top. Found during Phase 1 of the
+AArch64 port; worth reporting upstream.
+
+Of the four 256-bit FMA intrinsics this library uses, only
+`simde_mm256_fmadd_ps` delegates to the fused 128-bit path
+(`simde_mm_fmadd_ps`, which uses `vfmaq_f32`). The other three expand to a
+separate multiply and add:
+
+```c
+simde_mm256_fmadd_pd(a,b,c)  ->  simde_mm256_add_pd(simde_mm256_mul_pd(a, b), c)
+simde_mm256_fmsub_ps(a,b,c)  ->  simde_mm256_sub_ps(simde_mm256_mul_ps(a, b), c)
+simde_mm256_fmsub_pd(a,b,c)  ->  simde_mm256_sub_pd(simde_mm256_mul_pd(a, b), c)
+```
+
+That rounds twice. `simde_mm_fmsub_ps` and `simde_mm_fmsub_pd` have no NEON
+path either, so `fmadd` is the only usable fused building block.
+
+This library cannot tolerate it. `simd_f32_2`/`simd_f64_2` implement
+double-double arithmetic, and `two_product` depends on `fma(a, b, -a*b)`
+recovering the exact rounding error of the product. Without a true FMA that
+residual is zero and the extra precision silently disappears. The symptom was
+`f64 resid = 0000000000000000` in the semantics probe where x86 gives
+`bc90000000000000`, and, downstream, `acosh(simd_f32)` at 170 ULP against 5 on
+x86 and `tgamma` at 78 against 9.
+
+Worked around by overriding the three broken intrinsics in the SIMDe branch of
+`simd.hpp`: `fmadd_pd` is built from two `simde_mm_fmadd_pd` halves, and both
+`fmsub` forms as `fmadd` against a sign-flipped addend. Negation flips the sign
+bit rather than subtracting from zero, so `-0` and NaN payloads survive.
+
+With that in place the ARM build reproduces the x86 golden dump bit-for-bit
+except `rsqrt`. Revisit if SIMDe fixes this upstream — the override is guarded
+by nothing and will simply shadow a corrected implementation.
+
+## 6. Pre-existing warnings in simd.hpp
+
+`-Wall` on `include/simd.hpp` reports 83 warnings. None were introduced by the
+port; they are on the x86 path too and are recorded here rather than fixed.
+
+- **72 × strict-aliasing.** The `(simd_i32&) x` punning used throughout to
+  reinterpret a float vector as an integer one. It works because the classes
+  are layout-compatible, but it is undefined behaviour by the letter of the
+  standard and `-fno-strict-aliasing` is not set. The union members added in
+  Phase 1 (`w[]`) are the sanctioned way to do this and could replace the casts.
+- **8 × sign-compare.** `for (int i = 0; i < size(); i++)` against a `size_t`
+  `size()`.
+- **2 × unused variable.** A dead `simd_f32 y;` in `scalbn`, and its f64 twin.
+- **1 × control reaches end of non-void function.** `rint` switches on
+  `fegetround()` with no `default:`, so an unexpected rounding mode returns
+  nothing. Worth a `default: return round(x);`.
