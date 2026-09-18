@@ -74,10 +74,13 @@ int main() {
 		};
 		for (const auto& p : pairs) {
 			simd_f64 a(p[0]), b(p[1]);
+			/* simd_i64::operator[] yields int64_t, which is long on LP64
+			   AArch64 and long long on x86_64; cast so %lld is right on both. */
 			printf("%-14.6g %-14.6g %6lld %6lld %6lld %6lld %6lld %6lld\n",
 			       p[0], p[1],
-			       (a == b)[0], (a != b)[0], (a <  b)[0],
-			       (a <= b)[0], (a >  b)[0], (a >= b)[0]);
+			       (long long) (a == b)[0], (long long) (a != b)[0],
+			       (long long) (a <  b)[0], (long long) (a <= b)[0],
+			       (long long) (a >  b)[0], (long long) (a >= b)[0]);
 		}
 	}
 
