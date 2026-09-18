@@ -47,7 +47,7 @@ mask=-2147483648  f32 ->  20.0    f64 ->  10.0
 fdim(5,3)      = 2   (expect 2)
 fdim(3,5)      = 0   (expect 0)
 nextafter(1,2) = 3f800001  (libm 3f800001)
-nextafter(1,0) = 3f800000  (libm 3f7fffff)
+nextafter(1,0) = 3f7fffff  (libm 3f7fffff)
 
 ===== i32 arithmetic, per lane =====
 lane 0: a=1 b=10  a*b=10           a+b=11     a-b=-9     ~a=-2           !a=0

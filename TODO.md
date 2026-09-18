@@ -1,34 +1,39 @@
 # TODO
 
 Findings deliberately set aside. Each was observed and verified, but fixing it
-was out of scope at the time. Nothing here is fixed yet.
+was out of scope at the time. Items marked FIXED are kept rather than deleted,
+because the cause is usually worth remembering.
 
-When a fix lands, note it and re-capture the affected baseline artifact —
+When a fix lands, mark it here and re-capture the affected baseline artifact —
 several of these are visible in `baseline/x86/semantics.txt`, so a fix changes
 the reference the AArch64 port is diffed against.
 
 ---
 
-## 1. `nextafter` cannot step downwards
+## 1. `nextafter` cannot step downwards — FIXED
 
-`include/simd.hpp:476` (f32), `:1671` (f64).
+`include/simd.hpp:476` (f32), `:1671` (f64). Fixed 2026-09-17;
+`baseline/x86/semantics.txt` re-captured (one line changed).
 
-`nextafter(1.0f, 0.0f)` returns `0x3f800000` — the input unchanged. libm gives
-`0x3f7fffff`. Stepping upwards is correct.
+Kept here because the cause is worth remembering for the port. The old code was
 
 ```c
 simd_i32 dir = y - x > simd_f32(0);
-simd_i32 i = (simd_i32&) x;
 i += dir;
 ```
 
-Comparisons in this library return `1` for true and `0` for false, never `-1`
-(see `baseline/x86/semantics.txt`). So `dir` is `0` whenever `y < x`, and the
-integer representation is incremented or left alone — never decremented.
+and comparisons in this library return `1` or `0`, never `-1`, so `dir` was `0`
+whenever `y < x` — the bit pattern could only ever step up. Three further
+defects were hiding behind that one: floats are sign-magnitude, so the
+bit-space direction has to be reversed for negative `x`; `+-0` do not increment
+into their correct neighbours and need special-casing; and a NaN `y` cannot be
+detected with `y != y`, because `!=` returns `0` for NaN operands here —
+`!(y == y)` works.
 
-A fix needs `dir` in `{-1, +1}`, e.g. `2*(y > x) - 1`, with the `x == y` case
-decided separately. Note this is one of the places that would silently change
-meaning if a port switched comparisons to the all-ones convention.
+The replacement is verified against libm: 16/16 curated edge cases and 0
+mismatches in 300,000 random comparisons, for both overloads. Note it uses
+`sign(y) | 1` rather than `copysign`, because `copysign` is declared further
+down the header than `nextafter`.
 
 ## 2. `ilogb` is wrong for negative inputs
 

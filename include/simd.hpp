@@ -474,12 +474,19 @@ simd_f32 asin(simd_f32);
 simd_f32 acos(simd_f32 x);
 
 inline simd_f32 nextafter(simd_f32 x, simd_f32 y) {
-   simd_i32 ex, ey;
-	simd_f32 z;
-   simd_i32 dir = y - x > simd_f32(0);
-   simd_i32 i = (simd_i32&) x;
-   i += dir;
-   return (simd_f32&) i;
+	/* Comparisons yield 1 or 0 here, never -1, so the step has to be built
+	   explicitly; floats are sign-magnitude, so the bit-space direction is
+	   reversed for negative x; and +-0 and NaN do not fall out of either. */
+	const simd_i32 dir = (y > x) - (x > y);
+	simd_i32 i = (simd_i32&) x;
+	i += blend(dir, simd_i32(0) - dir, x < simd_f32(0));
+	simd_f32 r = (simd_f32&) i;
+	/* copysign() is declared further down, so take y's sign bit directly:
+	   sign(y) | 1 is the smallest denormal with y's sign. */
+	simd_i32 tiny = (((simd_i32&) y) & simd_i32((int) 0x80000000)) | simd_i32(1);
+	r = blend(r, (simd_f32&) tiny, x == simd_f32(0));
+	r = blend(r, y, x == y);
+	return blend(r, y, !(y == y));   /* y is NaN; y != y is false here */
 }
 
 inline simd_f32 remainder(simd_f32 n, simd_f32 d) {
@@ -1669,12 +1676,15 @@ inline simd_f64 acosh(simd_f64 x) {
 }
 
 inline simd_f64 nextafter(simd_f64 x, simd_f64 y) {
-   simd_i64 ex, ey;
-	simd_f64 z;
-   simd_i64 dir = y - x > simd_f64(0);
-   simd_i64 i = (simd_i64&) x;
-   i += dir;
-   return (simd_f64&) i;
+	/* See the simd_f32 overload for why each step is needed. */
+	const simd_i64 dir = (y > x) - (x > y);
+	simd_i64 i = (simd_i64&) x;
+	i += blend(dir, simd_i64(0) - dir, x < simd_f64(0));
+	simd_f64 r = (simd_f64&) i;
+	simd_i64 tiny = (((simd_i64&) y) & simd_i64((long long) 0x8000000000000000ULL)) | simd_i64(1);
+	r = blend(r, (simd_f64&) tiny, x == simd_f64(0));
+	r = blend(r, y, x == y);
+	return blend(r, y, !(y == y));   /* y is NaN; y != y is false here */
 }
 
 inline simd_f64 fdim(simd_f64 x, simd_f64 y) {
