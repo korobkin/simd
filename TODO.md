@@ -164,14 +164,55 @@ by nothing and will simply shadow a corrected implementation.
 `-Wall` on `include/simd.hpp` reports 83 warnings. None were introduced by the
 port; they are on the x86 path too and are recorded here rather than fixed.
 
-- **72 × strict-aliasing.** The `(simd_i32&) x` punning used throughout to
-  reinterpret a float vector as an integer one. It works because the classes
-  are layout-compatible, but it is undefined behaviour by the letter of the
-  standard and `-fno-strict-aliasing` is not set. The union members added in
-  Phase 1 (`w[]`) are the sanctioned way to do this and could replace the casts.
+- **72 × strict-aliasing.** Promoted to item 7 below — it is a live defect,
+  not a style warning.
 - **8 × sign-compare.** `for (int i = 0; i < size(); i++)` against a `size_t`
   `size()`.
 - **2 × unused variable.** A dead `simd_f32 y;` in `scalbn`, and its f64 twin.
 - **1 × control reaches end of non-void function.** `rint` switches on
   `fegetround()` with no `default:`, so an unexpected rounding mode returns
   nothing. Worth a `default: return round(x);`.
+
+## 7. The type punning is undefined behaviour and has started to bite
+
+`include/simd.hpp`, ~70 sites: `ldexp`, `frexp`, `scalbn`, `hypot`, `copysign`,
+`fabs`, `nextafter`, `ilogb` and others.
+
+The library reinterprets a `simd_i32` as a `simd_f32` and back with casts of
+the form
+
+```c
+simd_i32 i = (simd_i32&) x;      /* read the float's bits as integers  */
+...
+return (simd_f32&) i;            /* and back                           */
+```
+
+This is undefined behaviour. The two classes are layout-compatible, so it does
+what is intended as long as the compiler does not act on the assumption that an
+`int` and a `float` object cannot overlap — and it had been doing what was
+intended only by luck.
+
+Introducing the backend layer in Phase 2 changed the inlining enough for GCC to
+start acting on that assumption. It reordered the punned read before the write
+that produced it, and `ldexp(1.0f, 3)` returned `0x00000082` — a denormal,
+being the exponent field left unshifted — where `8.0` (`0x41000000`) was
+expected. `ldexp`'s own source was untouched by the refactor.
+
+Worth noting how it was caught. `golden.txt` does not exercise `ldexp` and
+showed nothing at all; every one of its 48 functions still matched. The
+`semantics.txt` diff is what surfaced it. This is the concrete case for the
+rule that a port diffs both files.
+
+**Current state: worked around, not fixed.** `-fno-strict-aliasing` is set
+PUBLIC on the `simd` target and is documented in the README's compile lines —
+PUBLIC because the punning is in the header, so callers need it too.
+
+The real fix is to replace the casts with `memcpy`, with `std::bit_cast`
+(C++20, which this project already requires), or with access through the `w[]`
+union members added in Phase 1, after which the flag could be dropped. Worth
+doing before the next structural change: the failure is silent, produces
+plausible-looking numbers, and depends on inlining decisions that any edit can
+perturb.
+
+This is not ARM-specific. The same UB is in the x86 build; it simply has not
+been triggered there yet.

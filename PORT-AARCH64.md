@@ -52,9 +52,31 @@ and emits the tables as literal 8-float initializer lists
 
 On NEON `simd_f32` holds 4 floats, so `i0 + 4` indexes past the end of the
 vector. Both the packing factor and the emitted table shape have to become
-functions of the lane count. The damage is bounded -- exactly two generated
-functions, `erf(simd_f32)` and `asin(simd_f32)` -- but it is real work, and it
-is generator work, not header work.
+functions of the lane count.
+
+`asin(simd_f64)` is width-dependent a third way, and worse. It converts a lane
+mask to an integer and uses it to index a table with **one row per possible
+mask**, i.e. `2^lanes` rows (`codegen.cpp:1589`, a literal `16` for 4 f64
+lanes, each row `4` wide):
+
+```c
+i = -i;
+j = _mm256_movemask_pd(((simd_f64&) i).v);   /* 0..15 */
+y = co[j][45];
+```
+
+Two consequences. The table is `2^lanes x N x lanes`, so it *shrinks* on NEON
+(4 rows of 2, not 16 of 4) but the emission loop has to be driven by the lane
+count. And this is **the one place a raw intrinsic reaches the generated
+code** -- everything else in `math.cpp` is written in terms of the public API.
+`simd.hpp:1211` carries a `friend simd_f64 asin(simd_f64 x);` declaration that
+exists solely so the generated function can reach the private `v`. The backend
+layer has to expose a `movemask` primitive, and the generator has to emit a
+call to that rather than to `_mm256_movemask_pd`.
+
+So it is three generated functions, not two -- `erf(simd_f32)`,
+`asin(simd_f32)`, `asin(simd_f64)` -- and it is generator work, not header
+work.
 
 ### 2. `CHECK_ALIGNMENT(this, 32)` appears 128 times
 
