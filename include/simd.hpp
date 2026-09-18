@@ -276,6 +276,8 @@ public:
 			w[i] = std::numeric_limits<int>::signaling_NaN();
 		}
 	}
+	friend simd_f32 from_bits(simd_i32);
+	friend simd_i32 to_bits(simd_f32);
 	friend simd_i32 max(simd_i32, simd_i32);
 	friend simd_i32 min(simd_i32, simd_i32);
 	friend simd_i32 lround(simd_f32);
@@ -479,9 +481,27 @@ public:
 	friend simd_f32 fmin(simd_f32, simd_f32);
 	friend simd_f32 blend(simd_f32, simd_f32, simd_i32);
 	friend simd_f32 frexp(simd_f32, simd_i32*);
+	friend simd_f32 from_bits(simd_i32);
+	friend simd_i32 to_bits(simd_f32);
 	friend class simd_f32_2;
 	friend class simd_i32;
 };
+
+/* Reinterpret a vector's bits between the float and integer classes. These
+   replace casts of the form to_bits(x), which were undefined behaviour and
+   had started to miscompile (TODO item 7). They lower to a register-level
+   reinterpret with no memory traffic. */
+inline simd_i32 to_bits(simd_f32 x) {
+	simd_i32 r;
+	r.v = backend::f32_as_i32(x.v);
+	return r;
+}
+
+inline simd_f32 from_bits(simd_i32 i) {
+	simd_f32 r;
+	r.v = backend::i32_as_f32(i.v);
+	return r;
+}
 
 simd_f32 log10(simd_f32);
 simd_f32 tgamma(simd_f32);
@@ -507,13 +527,13 @@ inline simd_f32 nextafter(simd_f32 x, simd_f32 y) {
 	   explicitly; floats are sign-magnitude, so the bit-space direction is
 	   reversed for negative x; and +-0 and NaN do not fall out of either. */
 	const simd_i32 dir = (y > x) - (x > y);
-	simd_i32 i = (simd_i32&) x;
+	simd_i32 i = to_bits(x);
 	i += blend(dir, simd_i32(0) - dir, x < simd_f32(0));
-	simd_f32 r = (simd_f32&) i;
+	simd_f32 r = from_bits(i);
 	/* copysign() is declared further down, so take y's sign bit directly:
 	   sign(y) | 1 is the smallest denormal with y's sign. */
-	simd_i32 tiny = (((simd_i32&) y) & simd_i32((int) 0x80000000)) | simd_i32(1);
-	r = blend(r, (simd_f32&) tiny, x == simd_f32(0));
+	simd_i32 tiny = (to_bits(y) & simd_i32((int) 0x80000000)) | simd_i32(1);
+	r = blend(r, from_bits(tiny), x == simd_f32(0));
 	r = blend(r, y, x == y);
 	return blend(r, y, !(y == y));   /* y is NaN; y != y is false here */
 }
@@ -536,8 +556,8 @@ inline simd_f32 remquo(simd_f32 n, simd_f32 d, simd_i32* q) {
 }
 
 inline simd_f32 fabs(simd_f32 x) {
-	simd_i32 i = (((simd_i32&) x) & simd_i32(0x7FFFFFFF));
-	return (simd_f32&) i;
+	simd_i32 i = (to_bits(x) & simd_i32(0x7FFFFFFF));
+	return from_bits(i);
 }
 
 inline simd_f32 abs(simd_f32 x) {
@@ -546,7 +566,7 @@ inline simd_f32 abs(simd_f32 x) {
 
 inline simd_f32 blend(simd_f32 a, simd_f32 b, simd_i32 mask) {
 	mask = -mask;
-	a.v = backend::f32_blendv(a.v, b.v, ((simd_f32&) mask).v);
+	a.v = backend::f32_blendv(a.v, b.v, backend::i32_as_f32(mask.v));
 	return a;
 }
 
@@ -655,8 +675,8 @@ inline simd_f32 rsqrt(simd_f32 x) {
 
 inline simd_f32 copysign(simd_f32 x, simd_f32 y) {
 	simd_f32 result = fabs(x);
-	simd_i32 i = ((simd_i32&) result) | (simd_i32(0x80000000) & (simd_i32&) (y));
-	result = (simd_f32&) i;
+	simd_i32 i = to_bits(result) | (simd_i32(0x80000000) & to_bits(y));
+	result = from_bits(i);
 	return result;
 }
 
@@ -667,14 +687,14 @@ inline simd_f32 atan2(simd_f32 y, simd_f32 x) {
 inline simd_f32 frexp(simd_f32 x, simd_i32* e) {
 	simd_i32 i, j;
 	simd_f32 y;
-	i = (simd_i32&) x;
+	i = to_bits(x);
 	j = i & simd_i32(0x807FFFFF);
 	j |= simd_i32(127 << 23);
 	i &= simd_i32(0x7F800000);
 	i >>= int(23);
 	i -= simd_i32(127);
 	*e = i;
-	y = (simd_f32&) j;
+	y = from_bits(j);
 	(*e) = (*e) + simd_i32(1);
 	y *= simd_f32(0.5);
 	return y;
@@ -691,7 +711,7 @@ inline simd_f32 tan(simd_f32 x) {
 }
 
 inline simd_i32 ilogb(simd_f32 x) {
-	simd_i32 i = (simd_i32&) x;
+	simd_i32 i = to_bits(x);
 	i >>= 23;
 	i -= 127;
 	return i;
@@ -704,21 +724,21 @@ inline simd_f32 logb(simd_f32 x) {
 inline simd_f32 ldexp(simd_f32 x, simd_i32 e) {
 	e += simd_i32(127);
 	e <<= 23;
-	x *= (simd_f32&) e;
+	x *= from_bits(e);
 	return x;
 }
 
 inline simd_f32 hypot(simd_f32 x, simd_f32 y) {
-	simd_i32 ix = (simd_i32&) x;
-	simd_i32 iy = (simd_i32&) y;
+	simd_i32 ix = to_bits(x);
+	simd_i32 iy = to_bits(y);
 	ix >>= 23;
 	iy >>= 23;
 	simd_i32 i = (ix + iy) >> 1;
 	simd_i32 j = simd_i32(254) - i;
 	i <<= 23;
 	j <<= 23;
-	const simd_f32 a = (simd_f32&) i;
-	const simd_f32 b = (simd_f32&) j;
+	const simd_f32 a = from_bits(i);
+	const simd_f32 b = from_bits(j);
 	x *= b;
 	y *= b;
 	return a * sqrt(x * x + y * y);
@@ -730,8 +750,8 @@ inline simd_f32 trunc(simd_f32 x) {
 }
 
 inline simd_f32 scalbn(simd_f32 x, simd_i32 n) {
-	simd_i32 i = (simd_i32&) x;
-	simd_i32 j = (simd_i32&) x;
+	simd_i32 i = to_bits(x);
+	simd_i32 j = to_bits(x);
 	simd_f32 y;
 	i >>= 23;
 	i &= 0xFF;
@@ -739,7 +759,7 @@ inline simd_f32 scalbn(simd_f32 x, simd_i32 n) {
 	i <<= 23;
 	j = j & 0x807FFFFF;
 	j |= i;
-	return (simd_f32&) j;
+	return from_bits(j);
 }
 
 inline simd_f32 rint(simd_f32 x) {
@@ -985,6 +1005,9 @@ public:
 	}
 	friend simd_f64 blend(simd_f64, simd_f64, simd_i64);
 	friend simd_i64 lround(simd_f64);
+	friend simd_i64 to_bits(simd_f64);
+	friend simd_f64 from_bits(simd_i64);
+	friend int movemask(simd_i64);
 	friend simd_f64;
 };
 
@@ -1183,9 +1206,29 @@ public:
 	friend simd_f64 fmin(simd_f64, simd_f64);
 	friend simd_f64 blend(simd_f64, simd_f64, simd_i64);
 	friend simd_f64 asin(simd_f64 x);
+	friend simd_f64 from_bits(simd_i64);
+	friend simd_i64 to_bits(simd_f64);
 	friend class simd_i64;
 	friend class simd_f64_2;
 };
+
+inline simd_i64 to_bits(simd_f64 x) {
+	simd_i64 r;
+	r.v = backend::f64_as_i64(x.v);
+	return r;
+}
+
+inline simd_f64 from_bits(simd_i64 i) {
+	simd_f64 r;
+	r.v = backend::i64_as_f64(i.v);
+	return r;
+}
+
+/* Sign bit of each lane, one bit per lane. The generated asin(simd_f64) uses
+   it to index a table with one row per mask value. */
+inline int movemask(simd_i64 i) {
+	return backend::f64_movemask(backend::i64_as_f64(i.v));
+}
 
 simd_f64 pow(simd_f64 y, simd_f64 x);
 simd_f64 log(simd_f64);
@@ -1202,24 +1245,24 @@ simd_f64 cbrt(simd_f64);
 simd_f64 log1p(simd_f64);
 
 inline simd_f64 hypot(simd_f64 x, simd_f64 y) {
-	simd_i64 ix = (simd_i64&) x;
-	simd_i64 iy = (simd_i64&) y;
+	simd_i64 ix = to_bits(x);
+	simd_i64 iy = to_bits(y);
 	ix >>= 52;
 	iy >>= 52;
 	simd_i64 i = (ix + iy) >> 1;
 	simd_i64 j = simd_i64(2026) - i;
 	i <<= 52;
 	j <<= 52;
-	const simd_f64 a = (simd_f64&) i;
-	const simd_f64 b = (simd_f64&) j;
+	const simd_f64 a = from_bits(i);
+	const simd_f64 b = from_bits(j);
 	x *= b;
 	y *= b;
 	return a * sqrt(x * x + y * y);
 }
 
 inline simd_f64 fabs(simd_f64 x) {
-	simd_i64 i = (((simd_i64&) x) & simd_i64(0x7FFFFFFFFFFFFFFFLL));
-	return (simd_f64&) i;
+	simd_i64 i = (to_bits(x) & simd_i64(0x7FFFFFFFFFFFFFFFLL));
+	return from_bits(i);
 }
 
 inline simd_f64 abs(simd_f64 x) {
@@ -1232,7 +1275,7 @@ simd_f64 atan(simd_f64 x);
 
 inline simd_f64 blend(simd_f64 a, simd_f64 b, simd_i64 mask) {
 	mask = -mask;
-	a.v = backend::f64_blendv(a.v, b.v, ((simd_f64&) mask).v);
+	a.v = backend::f64_blendv(a.v, b.v, backend::i64_as_f64(mask.v));
 	return a;
 }
 
@@ -1259,8 +1302,8 @@ simd_f64 exp2(simd_f64 x);
 
 inline simd_f64 copysign(simd_f64 x, simd_f64 y) {
 	simd_f64 result = fabs(x);
-	simd_i64 i = ((simd_i64&) result) | (simd_i64(0x8000000000000000LL) & (simd_i64&) (y));
-	result = (simd_f64&) i;
+	simd_i64 i = to_bits(result) | (simd_i64(0x8000000000000000LL) & to_bits(y));
+	result = from_bits(i);
 	return result;
 }
 
@@ -1311,14 +1354,14 @@ inline simd_f64 ceil(simd_f64 x) {
 inline simd_f64 frexp(simd_f64 x, simd_i64* e) {
 	simd_i64 i, j;
 	simd_f64 y;
-	i = (simd_i64&) x;
+	i = to_bits(x);
 	j = i & simd_i64(0x800FFFFFFFFFFFFFULL);
 	j |= simd_i64(1023ULL << 52ULL);
 	i &= simd_i64(0x7FF0000000000000ULL);
 	i >>= (long long) (52);
 	i -= simd_i64(1023);
 	*e = i;
-	y = (simd_f64&) j;
+	y = from_bits(j);
 	(*e) = (*e) + simd_i64(1);
 	y *= simd_f64(0.5);
 	return y;
@@ -1327,7 +1370,7 @@ inline simd_f64 frexp(simd_f64 x, simd_i64* e) {
 inline simd_f64 ldexp(simd_f64 x, simd_i64 e) {
 	e += simd_i64(1023);
 	e <<= (long long) 52;
-	x *= (simd_f64&) e;
+	x *= from_bits(e);
 	return x;
 }
 
@@ -1383,7 +1426,7 @@ inline simd_f64 modf(simd_f64 x, simd_f64* i) {
 }
 
 inline simd_i64 ilogb(simd_f64 x) {
-	simd_i64 i = (simd_i64&) x;
+	simd_i64 i = to_bits(x);
 	i >>= 52;
 	i -= 1023;
 	return i;
@@ -1394,8 +1437,8 @@ inline simd_f64 logb(simd_f64 x) {
 }
 
 inline simd_f64 scalbn(simd_f64 x, simd_i64 n) {
-	simd_i64 i = (simd_i64&) x;
-	simd_i64 j = (simd_i64&) x;
+	simd_i64 i = to_bits(x);
+	simd_i64 j = to_bits(x);
 	simd_f64 y;
 	i >>= 52;
 	i &= 0xFFFFFFFFFFFFFLL;
@@ -1403,7 +1446,7 @@ inline simd_f64 scalbn(simd_f64 x, simd_i64 n) {
 	i <<= 52;
 	j = j & 0x800FFFFFFFFFFFFFLL;
 	j |= i;
-	return (simd_f64&) j;
+	return from_bits(j);
 }
 
 inline simd_f64 rint(simd_f64 x) {
@@ -1731,11 +1774,11 @@ inline simd_f64 acosh(simd_f64 x) {
 inline simd_f64 nextafter(simd_f64 x, simd_f64 y) {
 	/* See the simd_f32 overload for why each step is needed. */
 	const simd_i64 dir = (y > x) - (x > y);
-	simd_i64 i = (simd_i64&) x;
+	simd_i64 i = to_bits(x);
 	i += blend(dir, simd_i64(0) - dir, x < simd_f64(0));
-	simd_f64 r = (simd_f64&) i;
-	simd_i64 tiny = (((simd_i64&) y) & simd_i64((long long) 0x8000000000000000ULL)) | simd_i64(1);
-	r = blend(r, (simd_f64&) tiny, x == simd_f64(0));
+	simd_f64 r = from_bits(i);
+	simd_i64 tiny = (to_bits(y) & simd_i64((long long) 0x8000000000000000ULL)) | simd_i64(1);
+	r = blend(r, from_bits(tiny), x == simd_f64(0));
 	r = blend(r, y, x == y);
 	return blend(r, y, !(y == y));   /* y is NaN; y != y is false here */
 }

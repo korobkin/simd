@@ -79,21 +79,19 @@ Everything lives in namespace `simd`. Include `simd.hpp`, link `libsimd`, and
 compile with the SIMD instruction set enabled. On x86_64:
 
 ```bash
-g++ -std=c++20 -march=native -mavx2 -fno-strict-aliasing \
-    -I../include main.cpp -L. -lsimd
+g++ -std=c++20 -march=native -mavx2 -I../include main.cpp -L. -lsimd
 ```
 
 On AArch64, drop `-mavx2` and add the SIMDe include path:
 
 ```bash
-g++ -std=c++20 -march=native -fno-strict-aliasing \
-    -I../include -I/path/to/simde main.cpp -L. -lsimd
+g++ -std=c++20 -march=native -I../include -I/path/to/simde main.cpp -L. -lsimd
 ```
 
 From CMake, link the `simd::simd` target, which already carries the include
 directory and the instruction-set flags chosen for the target architecture
 (`-march=native -mavx2` on x86_64, `-march=native` plus the SIMDe include path
-on AArch64) along with `-fno-strict-aliasing`, which the header requires:
+on AArch64):
 
 ```cmake
 add_subdirectory(external/simd)

@@ -847,16 +847,16 @@ void float_funcs(FILE* fp) {
 		fprintf(fp, "\tsimd_f32 y, y2, z, x0;\n");
 		fprintf(fp, "\tsimd_i32 i, j, k;\n");
 		fprintf(fp, "\tx0 = x * simd_f32(M_SQRT2);\n");
-		fprintf(fp, "\tj = ((simd_i32&) x0 & simd_i32(0x7F800000));\n");
-		fprintf(fp, "\tk = ((simd_i32&) x & simd_i32(0x7F800000));\n");
+		fprintf(fp, "\tj = (to_bits(x0) & simd_i32(0x7F800000));\n");
+		fprintf(fp, "\tk = (to_bits(x) & simd_i32(0x7F800000));\n");
 		fprintf(fp, "\tj >>= simd_i32(23);\n");
 		fprintf(fp, "\tk >>= simd_i32(23);\n");
 		fprintf(fp, "\tj -= simd_i32(127);\n");
 		fprintf(fp, "\tk -= j;\n");
 		fprintf(fp, "\tk <<= simd_i32(23);\n");
-		fprintf(fp, "\ti = (simd_i32&) x;\n");
+		fprintf(fp, "\ti = to_bits(x);\n");
 		fprintf(fp, "\ti = (i & simd_i32(0x007FFFFF)) | k;\n");
-		fprintf(fp, "\tx = (simd_f32&) i;\n");
+		fprintf(fp, "\tx = from_bits(i);\n");
 		fprintf(fp, "\ty = (x - simd_f32(1)) / (x + simd_f32(1));\n");
 		fprintf(fp, "\ty2 = y * y;\n");
 		fprintf(fp, "\tz = simd_f32(%.9e);\n", 2.0 / (2 * (N - 1) + 1) / log(2));
@@ -947,7 +947,7 @@ void float_funcs(FILE* fp) {
 			fprintf(fp, "\ty = fma(x, y, simd_f32(%.9e));\n", c0[n]);
 		}
 		fprintf(fp, "\ti = (simd_i32(x0) + simd_i32(127)) << int(23);\n");
-		fprintf(fp, "\ty *= (simd_f32&) i;\n");
+		fprintf(fp, "\ty *= from_bits(i);\n");
 		fprintf(fp, "\treturn y;\n");
 		fprintf(fp, "}\n\n");
 	}
@@ -978,7 +978,7 @@ void float_funcs(FILE* fp) {
 			fprintf(fp, "\ty = fma(x, y, simd_f32(%.9e));\n", c0[n]);
 		}
 		fprintf(fp, "\ti = (simd_i32(x0) + simd_i32(127)) << int(23);\n");
-		fprintf(fp, "\ty *= (simd_f32&) i;\n");
+		fprintf(fp, "\ty *= from_bits(i);\n");
 		fprintf(fp, "\treturn y;\n");
 		fprintf(fp, "}\n\n");
 	}
@@ -1041,7 +1041,7 @@ void float_funcs(FILE* fp) {
 		fprintf(fp, "\tq = x + simd_f32(1);\n");
 		fprintf(fp, "\tx = fmin(x, simd_f32(%.9e));\n", double(xmax));
 		fprintf(fp, "\tq *= q;\n");
-		fprintf(fp, "\ti = ((((simd_i32&) q) & simd_i32(0x7F800000)) >> int(23)) - simd_i32(127);\n");
+		fprintf(fp, "\ti = ((to_bits(q) & simd_i32(0x7F800000)) >> int(23)) - simd_i32(127);\n");
 		fprintf(fp, "\ty = x * x ;\n");
 		fprintf(fp, "\tz = fma(x, x, -y);\n");
 		fprintf(fp, "\te = exp(-y) * (simd_f32(1) - z);\n");
@@ -1077,16 +1077,16 @@ void float_funcs(FILE* fp) {
 		fprintf(fp, "\tsimd_i32 i, j, k;\n");
 		fprintf(fp, "\tsimd_f32_2 X2, X, Z;\n");
 		fprintf(fp, "\tx0 = x * simd_f32(M_SQRT2);\n");
-		fprintf(fp, "\tj = ((simd_i32&) x0 & simd_i32(0x7F800000));\n");
-		fprintf(fp, "\tk = ((simd_i32&) x & simd_i32(0x7F800000));\n");
+		fprintf(fp, "\tj = (to_bits(x0) & simd_i32(0x7F800000));\n");
+		fprintf(fp, "\tk = (to_bits(x) & simd_i32(0x7F800000));\n");
 		fprintf(fp, "\tj >>= simd_i32(23);\n");
 		fprintf(fp, "\tk >>= simd_i32(23);\n");
 		fprintf(fp, "\tj -= simd_i32(127);\n");
 		fprintf(fp, "\tk -= j;\n");
 		fprintf(fp, "\tk <<= simd_i32(23);\n");
-		fprintf(fp, "\ti = (simd_i32&) x;\n");
+		fprintf(fp, "\ti = to_bits(x);\n");
 		fprintf(fp, "\ti = (i & simd_i32(0x7FFFFFULL)) | k;\n");
-		fprintf(fp, "\tX = (simd_f32&) i;\n");
+		fprintf(fp, "\tX = from_bits(i);\n");
 		fprintf(fp, "\tX = (X - simd_f32(1)) / (X + simd_f32(1));\n");
 		fprintf(fp, "\tX2 = X * X;\n");
 		fprintf(fp, "\tx2 = X2.x;\n");
@@ -1623,7 +1623,7 @@ void double_funcs(FILE* fp) {
 		fprintf(fp, "\tx1 = simd_f64(%.17e) * z - simd_f64(1);\n", (double) (hiprec_real(2) / sqrt(hiprec_real(1) - z0)));
 		fprintf(fp, "\tx = blend(x0, x1, i);\n");
 		fprintf(fp, "\ti = -i;\n");
-		fprintf(fp, "\tj =  _mm256_movemask_pd(((simd_f64&) i).v);\n");
+		fprintf(fp, "\tj = movemask(i);\n");
 		fprintf(fp, "\ty = co[j][%i];\n", (N - 1));
 		for (int n = N - 2; n >= 0; n--) {
 			fprintf(fp, "\ty = fma(y, x, co[j][%i]);\n", n);
@@ -1676,16 +1676,16 @@ void double_funcs(FILE* fp) {
 		fprintf(fp, "\tsimd_f64 y, y2, z, x0;\n");
 		fprintf(fp, "\tsimd_i64 i, j, k;\n");
 		fprintf(fp, "\tx0 = x * simd_f64(M_SQRT2);\n");
-		fprintf(fp, "\tj = ((simd_i64&) x0 & simd_i64(0x7FF0000000000000ULL));\n");
-		fprintf(fp, "\tk = ((simd_i64&) x & simd_i64(0x7FF0000000000000ULL));\n");
+		fprintf(fp, "\tj = (to_bits(x0) & simd_i64(0x7FF0000000000000ULL));\n");
+		fprintf(fp, "\tk = (to_bits(x) & simd_i64(0x7FF0000000000000ULL));\n");
 		fprintf(fp, "\tj >>= simd_i64(52);\n");
 		fprintf(fp, "\tk >>= simd_i64(52);\n");
 		fprintf(fp, "\tj -= simd_i64(1023);\n");
 		fprintf(fp, "\tk -= j;\n");
 		fprintf(fp, "\tk <<= simd_i64(52);\n");
-		fprintf(fp, "\ti = (simd_i64&) x;\n");
+		fprintf(fp, "\ti = to_bits(x);\n");
 		fprintf(fp, "\ti = (i & simd_i64(0xFFFFFFFFFFFFFULL)) | k;\n");
-		fprintf(fp, "\tx = (simd_f64&) i;\n");
+		fprintf(fp, "\tx = from_bits(i);\n");
 		fprintf(fp, "\ty = (x - simd_f64(1)) / (x + simd_f64(1));\n");
 		fprintf(fp, "\ty2 = y * y;\n");
 		fprintf(fp, "\tz = simd_f64(%.17e);\n", (double) (2.0L / (long double) (2 * (N - 1) + 1) / logl(2)));
@@ -1834,7 +1834,7 @@ void double_funcs(FILE* fp) {
 			fprintf(fp, "\ty = fma(x, y, simd_f64(%.17e));\n", (double) c0[n]);
 		}
 		fprintf(fp, "\ti = (simd_i64(x0) + simd_i64(1023)) << (long long)(52);\n");
-		fprintf(fp, "\ty *= (simd_f64&) i;\n");
+		fprintf(fp, "\ty *= from_bits(i);\n");
 		fprintf(fp, "\treturn y;\n");
 		fprintf(fp, "}\n\n");
 		fprintf(fp, "\n");
@@ -1949,7 +1949,7 @@ void double_funcs(FILE* fp) {
 		fprintf(fp, "\tx = fmin(x, simd_f64(%.17e));\n", double(xmax));
 		fprintf(fp, "\tq *= q;\n");
 		fprintf(fp, "\tq *= q;\n");
-		fprintf(fp, "\ti = ((((simd_i64&) q) & simd_i64(0x7FF0000000000000)) >> (long long)(52)) - simd_i64(1023);\n");
+		fprintf(fp, "\ti = ((to_bits(q) & simd_i64(0x7FF0000000000000)) >> (long long)(52)) - simd_i64(1023);\n");
 		fprintf(fp, "\tZ = simd_f64_2::two_product(x, x) ;\n");
 		fprintf(fp, "\te = exp(-Z.x) * (simd_f64(1) - Z.y);\n");
 		fprintf(fp, "\ta.gather(x0, i);\n");
@@ -1986,16 +1986,16 @@ void double_funcs(FILE* fp) {
 		fprintf(fp, "\tsimd_i64 i, j, k;\n");
 		fprintf(fp, "\tsimd_f64_2 X2, X, Z;\n");
 		fprintf(fp, "\tx0 = x * simd_f64(M_SQRT2);\n");
-		fprintf(fp, "\tj = ((simd_i64&) x0 & simd_i64(0x7FF0000000000000ULL));\n");
-		fprintf(fp, "\tk = ((simd_i64&) x & simd_i64(0x7FF0000000000000ULL));\n");
+		fprintf(fp, "\tj = (to_bits(x0) & simd_i64(0x7FF0000000000000ULL));\n");
+		fprintf(fp, "\tk = (to_bits(x) & simd_i64(0x7FF0000000000000ULL));\n");
 		fprintf(fp, "\tj >>= simd_i64(52);\n");
 		fprintf(fp, "\tk >>= simd_i64(52);\n");
 		fprintf(fp, "\tj -= simd_i64(1023);\n");
 		fprintf(fp, "\tk -= j;\n");
 		fprintf(fp, "\tk <<= simd_i64(52);\n");
-		fprintf(fp, "\ti = (simd_i64&) x;\n");
+		fprintf(fp, "\ti = to_bits(x);\n");
 		fprintf(fp, "\ti = (i & simd_i64(0xFFFFFFFFFFFFFULL)) | k;\n");
-		fprintf(fp, "\tX = (simd_f64&) i;\n");
+		fprintf(fp, "\tX = from_bits(i);\n");
 		fprintf(fp, "\tX = (X - simd_f64(1)) / (X + simd_f64(1));\n");
 		fprintf(fp, "\tX2 = X * X;\n");
 		fprintf(fp, "\tx2 = X2.x;\n");

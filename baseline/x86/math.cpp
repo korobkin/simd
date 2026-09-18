@@ -378,16 +378,16 @@ simd_f32 log2(simd_f32 x) {
 	simd_f32 y, y2, z, x0;
 	simd_i32 i, j, k;
 	x0 = x * simd_f32(M_SQRT2);
-	j = ((simd_i32&) x0 & simd_i32(0x7F800000));
-	k = ((simd_i32&) x & simd_i32(0x7F800000));
+	j = (to_bits(x0) & simd_i32(0x7F800000));
+	k = (to_bits(x) & simd_i32(0x7F800000));
 	j >>= simd_i32(23);
 	k >>= simd_i32(23);
 	j -= simd_i32(127);
 	k -= j;
 	k <<= simd_i32(23);
-	i = (simd_i32&) x;
+	i = to_bits(x);
 	i = (i & simd_i32(0x007FFFFF)) | k;
-	x = (simd_f32&) i;
+	x = from_bits(i);
 	y = (x - simd_f32(1)) / (x + simd_f32(1));
 	y2 = y * y;
 	z = simd_f32(4.121985831e-01);
@@ -454,7 +454,7 @@ simd_f32 exp(simd_f32 x) {
 	y = fma(x, y, simd_f32(1.000000000e+00));
 	y = fma(x, y, simd_f32(1.000000000e+00));
 	i = (simd_i32(x0) + simd_i32(127)) << int(23);
-	y *= (simd_f32&) i;
+	y *= from_bits(i);
 	return y;
 }
 
@@ -475,7 +475,7 @@ simd_f32 exp2(simd_f32 x) {
 	y = fma(x, y, simd_f32(6.931471806e-01));
 	y = fma(x, y, simd_f32(1.000000000e+00));
 	i = (simd_i32(x0) + simd_i32(127)) << int(23);
-	y *= (simd_f32&) i;
+	y *= from_bits(i);
 	return y;
 }
 
@@ -501,7 +501,7 @@ simd_f32 erfc(simd_f32 x) {
 	q = x + simd_f32(1);
 	x = fmin(x, simd_f32(9.100000000e+00));
 	q *= q;
-	i = ((((simd_i32&) q) & simd_i32(0x7F800000)) >> int(23)) - simd_i32(127);
+	i = ((to_bits(q) & simd_i32(0x7F800000)) >> int(23)) - simd_i32(127);
 	y = x * x ;
 	z = fma(x, x, -y);
 	e = exp(-y) * (simd_f32(1) - z);
@@ -526,16 +526,16 @@ simd_f32 pow(simd_f32 x, simd_f32 y) {
 	simd_i32 i, j, k;
 	simd_f32_2 X2, X, Z;
 	x0 = x * simd_f32(M_SQRT2);
-	j = ((simd_i32&) x0 & simd_i32(0x7F800000));
-	k = ((simd_i32&) x & simd_i32(0x7F800000));
+	j = (to_bits(x0) & simd_i32(0x7F800000));
+	k = (to_bits(x) & simd_i32(0x7F800000));
 	j >>= simd_i32(23);
 	k >>= simd_i32(23);
 	j -= simd_i32(127);
 	k -= j;
 	k <<= simd_i32(23);
-	i = (simd_i32&) x;
+	i = to_bits(x);
 	i = (i & simd_i32(0x7FFFFFULL)) | k;
-	X = (simd_f32&) i;
+	X = from_bits(i);
 	X = (X - simd_f32(1)) / (X + simd_f32(1));
 	X2 = X * X;
 	x2 = X2.x;
@@ -1654,7 +1654,7 @@ simd_f64 asin(simd_f64 x) {
 	x1 = simd_f64(2.82842712474619029e+00) * z - simd_f64(1);
 	x = blend(x0, x1, i);
 	i = -i;
-	j =  _mm256_movemask_pd(((simd_f64&) i).v);
+	j = movemask(i);
 	y = co[j][45];
 	y = fma(y, x, co[j][44]);
 	y = fma(y, x, co[j][43]);
@@ -1767,16 +1767,16 @@ simd_f64 log2(simd_f64 x) {
 	simd_f64 y, y2, z, x0;
 	simd_i64 i, j, k;
 	x0 = x * simd_f64(M_SQRT2);
-	j = ((simd_i64&) x0 & simd_i64(0x7FF0000000000000ULL));
-	k = ((simd_i64&) x & simd_i64(0x7FF0000000000000ULL));
+	j = (to_bits(x0) & simd_i64(0x7FF0000000000000ULL));
+	k = (to_bits(x) & simd_i64(0x7FF0000000000000ULL));
 	j >>= simd_i64(52);
 	k >>= simd_i64(52);
 	j -= simd_i64(1023);
 	k -= j;
 	k <<= simd_i64(52);
-	i = (simd_i64&) x;
+	i = to_bits(x);
 	i = (i & simd_i64(0xFFFFFFFFFFFFFULL)) | k;
-	x = (simd_f64&) i;
+	x = from_bits(i);
 	y = (x - simd_f64(1)) / (x + simd_f64(1));
 	y2 = y * y;
 	z = simd_f64(1.51862635883048769e-01);
@@ -1908,7 +1908,7 @@ simd_f64 exp2(simd_f64 x) {
 	y = fma(x, y, simd_f64(6.93147180559945286e-01));
 	y = fma(x, y, simd_f64(1.00000000000000000e+00));
 	i = (simd_i64(x0) + simd_i64(1023)) << (long long)(52);
-	y *= (simd_f64&) i;
+	y *= from_bits(i);
 	return y;
 }
 
@@ -1951,7 +1951,7 @@ simd_f64 erfc(simd_f64 x) {
 	x = fmin(x, simd_f64(2.66000000000000014e+01));
 	q *= q;
 	q *= q;
-	i = ((((simd_i64&) q) & simd_i64(0x7FF0000000000000)) >> (long long)(52)) - simd_i64(1023);
+	i = ((to_bits(q) & simd_i64(0x7FF0000000000000)) >> (long long)(52)) - simd_i64(1023);
 	Z = simd_f64_2::two_product(x, x) ;
 	e = exp(-Z.x) * (simd_f64(1) - Z.y);
 	a.gather(x0, i);
@@ -1980,16 +1980,16 @@ simd_f64 pow(simd_f64 x, simd_f64 y) {
 	simd_i64 i, j, k;
 	simd_f64_2 X2, X, Z;
 	x0 = x * simd_f64(M_SQRT2);
-	j = ((simd_i64&) x0 & simd_i64(0x7FF0000000000000ULL));
-	k = ((simd_i64&) x & simd_i64(0x7FF0000000000000ULL));
+	j = (to_bits(x0) & simd_i64(0x7FF0000000000000ULL));
+	k = (to_bits(x) & simd_i64(0x7FF0000000000000ULL));
 	j >>= simd_i64(52);
 	k >>= simd_i64(52);
 	j -= simd_i64(1023);
 	k -= j;
 	k <<= simd_i64(52);
-	i = (simd_i64&) x;
+	i = to_bits(x);
 	i = (i & simd_i64(0xFFFFFFFFFFFFFULL)) | k;
-	X = (simd_f64&) i;
+	X = from_bits(i);
 	X = (X - simd_f64(1)) / (X + simd_f64(1));
 	X2 = X * X;
 	x2 = X2.x;

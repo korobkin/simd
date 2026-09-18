@@ -158,13 +158,6 @@ add_library(simd::simd ALIAS simd)
 target_include_directories(
 	simd PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${SIMDE_INCLUDE_DIRS}
 )
-# -fno-strict-aliasing is REQUIRED, not a preference. simd.hpp reinterprets a
-# simd_i32 as a simd_f32 and back in ~70 places (ldexp, frexp, scalbn, hypot,
-# copysign, fabs, nextafter, ...), which the standard does not permit. It has
-# been compiling correctly by luck; introducing the backend layer changed the
-# inlining enough that GCC started reordering the punned read before the write
-# that produced it, and ldexp began returning denormals. PUBLIC because the
-# punning is in the header, so callers need the flag too. See TODO item 6.
 #
 # -ffp-contract=fast is load-bearing, not a default worth inheriting silently.
 # The generated code relies on the compiler contracting a*b+c into an FMA for
@@ -172,9 +165,7 @@ target_include_directories(
 # 4 to 68 ULP, f32 erfc from 9 to 71, f32 cosh from 2 to 10, f32 sinh from 3 to
 # 9. It is GCC's default, so pinning it changes nothing here, but Clang and
 # some distributions default differently and would quietly lose that accuracy.
-target_compile_options(
-	simd PUBLIC ${SIMD_ARCH_FLAGS} -fno-strict-aliasing -ffp-contract=fast
-)
+target_compile_options(simd PUBLIC ${SIMD_ARCH_FLAGS} -ffp-contract=fast)
 set_target_properties(simd PROPERTIES PUBLIC_HEADER "include/simd.hpp")
 
 # simd_test inherits the architecture flags and the include directory from the
@@ -187,7 +178,7 @@ target_link_libraries(
 
 # The baseline probes. Built as targets rather than by hand-copied g++ lines,
 # so they inherit the simd target's architecture flags, include directories and
-# -fno-strict-aliasing automatically -- a hand-written compile line silently
+# -ffp-contract=fast automatically -- a hand-written compile line silently
 # drops those and can make the probes disagree with the library they test.
 option(SIMD_BUILD_BASELINE_TOOLS "Build the golden/semantics baseline probes" ON)
 if(SIMD_BUILD_BASELINE_TOOLS)

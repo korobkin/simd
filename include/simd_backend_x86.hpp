@@ -114,6 +114,12 @@ static inline f32v f32_blendv(f32v a, f32v b, f32v mask) { return _mm256_blendv_
 static inline f32v f32_gather(const float* p, i32v idx)  { return _mm256_i32gather_ps(p, idx, sizeof(float)); }
 static inline f32v f32_permute(f32v a, i32v idx)         { return _mm256_permutevar8x32_ps(a, idx); }
 
+/* Bit reinterpretation, not conversion: no value changes, no memory traffic.
+   These replace the (simd_i32&) casts the header used to do, which were
+   undefined behaviour -- see TODO item 7. */
+static inline i32v f32_as_i32(f32v a)            { return _mm256_castps_si256(a); }
+static inline f32v i32_as_f32(i32v a)            { return _mm256_castsi256_ps(a); }
+
 static inline f32v f32_from_i32(i32v a)          { return _mm256_cvtepi32_ps(a); }
 static inline i32v f32_to_i32_nearest(f32v a)    { return _mm256_cvtps_epi32(f32_round_nearest(a)); }
 static inline i32v f32_to_i32_zero(f32v a)       { return _mm256_cvtps_epi32(f32_round_zero(a)); }
@@ -197,6 +203,9 @@ static inline i64v f64_cmp_gt(f64v a, f64v b)  { return _mm256_castpd_si256(_mm2
 static inline i64v f64_cmp_ge(f64v a, f64v b)  { return _mm256_castpd_si256(_mm256_cmp_pd(a, b, _CMP_GE_OS)); }
 static inline i64v f64_cmp_lt(f64v a, f64v b)  { return _mm256_castpd_si256(_mm256_cmp_pd(a, b, _CMP_LT_OS)); }
 static inline i64v f64_cmp_le(f64v a, f64v b)  { return _mm256_castpd_si256(_mm256_cmp_pd(a, b, _CMP_LE_OS)); }
+
+static inline i64v f64_as_i64(f64v a)            { return _mm256_castpd_si256(a); }
+static inline f64v i64_as_f64(i64v a)            { return _mm256_castsi256_pd(a); }
 
 static inline f64v f64_blendv(f64v a, f64v b, f64v mask) { return _mm256_blendv_pd(a, b, mask); }
 static inline f64v f64_gather(const double* p, i64v idx) { return _mm256_i64gather_pd(p, idx, sizeof(double)); }
