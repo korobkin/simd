@@ -13,9 +13,17 @@ types in C.
 
 ## Installation
 
+This library is **x86_64-only**: it requires AVX2 and FMA. There is no ARM
+build yet -- see [ARCH.md](ARCH.md) for why and [PORT-AARCH64.md](PORT-AARCH64.md)
+for the plan. Configuring on AArch64 now succeeds, but the compile stops at
+`<immintrin.h>`.
+
 Prerequisites:
  - gmp, gmp-devel library;
  - mpfr, mpfr-devel library.
+
+Both are needed by the code generator and the test; the library itself does
+not link them.
 
 To install, use the standard cmake procedure:
 
@@ -23,6 +31,13 @@ To install, use the standard cmake procedure:
    mkdir build; cd build
    cmake .. -DCMAKE_BUILD_TYPE=Release
    make
+```
+
+If gmp and mpfr live outside the default search path -- in a conda environment,
+say -- point CMake at the prefix:
+
+```bash
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/path/to/prefix
 ```
 
 This will create an executable `simd_test`. If you run it, it should
@@ -51,14 +66,15 @@ representation).
 ## Usage
 
 Everything lives in namespace `simd`. Include `simd.hpp`, link `libsimd`, and
-compile with the SIMD instruction set enabled:
+compile with the SIMD instruction set enabled -- on x86_64:
 
 ```bash
 g++ -std=c++20 -march=native -mavx2 -I../include main.cpp -L. -lsimd
 ```
 
 From CMake, link the `simd::simd` target, which already carries the include
-directory and the required `-march=native -mavx2` flags:
+directory and the instruction-set flags chosen for the target architecture
+(`-march=native -mavx2` on x86_64):
 
 ```cmake
 add_subdirectory(external/simd)

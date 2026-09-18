@@ -3,6 +3,86 @@ cmake_policy(VERSION 3.12.4)
 project(simd CXX)
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
+include(CheckCXXCompilerFlag)
+
+# --- SIMD instruction set ----------------------------------------------------
+# The vector backend in include/simd.hpp is x86_64-only today; see ARCH.md and
+# PORT-AARCH64.md. These flags are selected per architecture so that configuring
+# on AArch64 succeeds and the build then fails on the missing <immintrin.h> --
+# the real blocker -- rather than on an unrecognised -mavx2, which says nothing
+# useful. The flags are probed rather than assumed: Apple clang on arm64 rejects
+# -march=native and wants -mcpu=native instead.
+set(SIMD_ARCH_FLAGS "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
+	check_cxx_compiler_flag("-march=native" SIMD_HAVE_MARCH_NATIVE)
+	if(SIMD_HAVE_MARCH_NATIVE)
+		list(APPEND SIMD_ARCH_FLAGS -march=native)
+	endif()
+	check_cxx_compiler_flag("-mavx2" SIMD_HAVE_MAVX2)
+	if(SIMD_HAVE_MAVX2)
+		list(APPEND SIMD_ARCH_FLAGS -mavx2)
+	else()
+		message(WARNING
+			"The compiler does not accept -mavx2. include/simd.hpp needs AVX2 "
+			"and will not build."
+		)
+	endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+	check_cxx_compiler_flag("-march=native" SIMD_HAVE_MARCH_NATIVE)
+	if(SIMD_HAVE_MARCH_NATIVE)
+		list(APPEND SIMD_ARCH_FLAGS -march=native)
+	else()
+		check_cxx_compiler_flag("-mcpu=native" SIMD_HAVE_MCPU_NATIVE)
+		if(SIMD_HAVE_MCPU_NATIVE)
+			list(APPEND SIMD_ARCH_FLAGS -mcpu=native)
+		endif()
+	endif()
+	message(STATUS
+		"simd: AArch64 detected. include/simd.hpp is still x86-only, so the "
+		"build is expected to stop at <immintrin.h>; see PORT-AARCH64.md."
+	)
+else()
+	message(WARNING
+		"simd: unrecognised target architecture '${CMAKE_SYSTEM_PROCESSOR}'. "
+		"Building without any SIMD instruction-set flags."
+	)
+endif()
+message(STATUS "simd: architecture flags: ${SIMD_ARCH_FLAGS}")
+
+# --- Dependencies ------------------------------------------------------------
+# mpfr and gmp were previously linked by bare name, which finds them only when
+# they sit in the default link path. Locate them properly so an out-of-tree
+# prefix (a conda environment, a local install) can be selected with
+# -DCMAKE_PREFIX_PATH=... . Only the code generator and the test need them; the
+# simd library itself does not.
+find_path(MPFR_INCLUDE_DIR NAMES mpfr.h)
+find_library(MPFR_LIBRARY NAMES mpfr)
+find_path(GMP_INCLUDE_DIR NAMES gmp.h)
+find_library(GMP_LIBRARY NAMES gmp)
+
+if(NOT MPFR_INCLUDE_DIR OR NOT MPFR_LIBRARY OR NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
+	message(FATAL_ERROR
+		"simd: mpfr and gmp (headers and libraries) are required by the code "
+		"generator and the test.\n"
+		"  mpfr.h: ${MPFR_INCLUDE_DIR}\n"
+		"  libmpfr: ${MPFR_LIBRARY}\n"
+		"  gmp.h: ${GMP_INCLUDE_DIR}\n"
+		"  libgmp: ${GMP_LIBRARY}\n"
+		"Install them (libmpfr-dev and libgmp-dev on Debian/Ubuntu) or point "
+		"CMake at an existing prefix, e.g.\n"
+		"  cmake .. -DCMAKE_PREFIX_PATH=/path/to/prefix"
+	)
+endif()
+message(STATUS "simd: mpfr: ${MPFR_LIBRARY}")
+message(STATUS "simd: gmp:  ${GMP_LIBRARY}")
+
+# Replaces the bare `pthread` link name and the hand-written -pthread flag.
+# THREADS_PREFER_PTHREAD_FLAG asks for -pthread over -lpthread where a flag is
+# needed at all; on glibc >= 2.34 the pthread symbols live in libc and CMake
+# correctly emits neither.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 set(SIMD_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_code")
 set(SIMD_GENERATED_MATH "${SIMD_GENERATED_DIR}/src/math.cpp")
 
@@ -10,12 +90,19 @@ set(SIMD_GENERATED_MATH "${SIMD_GENERATED_DIR}/src/math.cpp")
 # run by execute_process() while configuring. This keeps `cmake` quiet and
 # fast, lets the generator be rebuilt with the project's toolchain, and makes
 # regeneration a build step that can be re-run when its inputs change.
+#
+# It is deliberately built WITHOUT the SIMD architecture flags. It includes
+# simd.hpp but never calls the vector operations, so the unused inline
+# functions are discarded and no AVX2 support is needed. Adding -march=native
+# here would enable FMA contraction in the generator's own double-precision
+# arithmetic and could shift the coefficients it emits.
 add_executable(simd_codegen ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen.cpp)
 target_compile_definitions(
 	simd_codegen PRIVATE SIMD_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_compile_options(simd_codegen PRIVATE -O3)
-target_link_libraries(simd_codegen PRIVATE mpfr gmp pthread)
+target_include_directories(simd_codegen PRIVATE ${MPFR_INCLUDE_DIR} ${GMP_INCLUDE_DIR})
+target_link_libraries(simd_codegen PRIVATE ${MPFR_LIBRARY} ${GMP_LIBRARY} Threads::Threads)
 
 # Regenerated whenever the generator or the sources it splices in change.
 add_custom_command(
@@ -33,13 +120,16 @@ add_custom_command(
 add_library(simd ${SIMD_GENERATED_MATH})
 add_library(simd::simd ALIAS simd)
 target_include_directories(simd PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_options(simd PUBLIC -march=native -mavx2)
+target_compile_options(simd PUBLIC ${SIMD_ARCH_FLAGS})
 set_target_properties(simd PROPERTIES PUBLIC_HEADER "include/simd.hpp")
 
+# simd_test inherits the architecture flags and the include directory from the
+# simd target, which carries them PUBLIC.
 add_executable(simd_test ${CMAKE_CURRENT_SOURCE_DIR}/src/test.cpp)
-target_include_directories(simd_test PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(simd_test PUBLIC simd pthread mpfr gmp)
-target_compile_options(simd_test PUBLIC -pthread -march=native)
+target_include_directories(simd_test PRIVATE ${MPFR_INCLUDE_DIR} ${GMP_INCLUDE_DIR})
+target_link_libraries(
+	simd_test PUBLIC simd ${MPFR_LIBRARY} ${GMP_LIBRARY} Threads::Threads
+)
 
 install(TARGETS simd_test DESTINATION bin)
 install(TARGETS simd
