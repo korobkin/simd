@@ -69,10 +69,10 @@ Two consequences. The table is `2^lanes x N x lanes`, so it *shrinks* on NEON
 (4 rows of 2, not 16 of 4) but the emission loop has to be driven by the lane
 count. And this is **the one place a raw intrinsic reaches the generated
 code** -- everything else in `math.cpp` is written in terms of the public API.
-`simd.hpp:1211` carries a `friend simd_f64 asin(simd_f64 x);` declaration that
-exists solely so the generated function can reach the private `v`. The backend
-layer has to expose a `movemask` primitive, and the generator has to emit a
-call to that rather than to `_mm256_movemask_pd`.
+It used to carry a raw `_mm256_movemask_pd` and a `friend simd_f64
+asin(simd_f64 x);` declaration to reach the private `v`; the generator now
+emits a `movemask(simd_i64)` helper instead, so the generated source no longer
+reaches into the backend. The remaining work is the table's shape.
 
 So it is three generated functions, not two -- `erf(simd_f32)`,
 `asin(simd_f32)`, `asin(simd_f64)` -- and it is generator work, not header

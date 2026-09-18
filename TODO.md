@@ -161,11 +161,9 @@ by nothing and will simply shadow a corrected implementation.
 
 ## 6. Pre-existing warnings in simd.hpp
 
-`-Wall` on `include/simd.hpp` reports 83 warnings. None were introduced by the
-port; they are on the x86 path too and are recorded here rather than fixed.
-
-- **72 × strict-aliasing.** Promoted to item 7 below — it is a live defect,
-  not a style warning.
+`-Wall` on `include/simd.hpp` reports 11 warnings, down from 83 once item 7
+removed the 72 strict-aliasing ones. None were introduced by the port; they are
+on the x86 path too and are recorded here rather than fixed.
 - **8 × sign-compare.** `for (int i = 0; i < size(); i++)` against a `size_t`
   `size()`.
 - **2 × unused variable.** A dead `simd_f32 y;` in `scalbn`, and its f64 twin.
@@ -173,7 +171,7 @@ port; they are on the x86 path too and are recorded here rather than fixed.
   `fegetround()` with no `default:`, so an unexpected rounding mode returns
   nothing. Worth a `default: return round(x);`.
 
-## 7. The type punning is undefined behaviour and has started to bite
+## 7. The type punning is undefined behaviour and has started to bite — FIXED
 
 `include/simd.hpp`, ~70 sites: `ldexp`, `frexp`, `scalbn`, `hypot`, `copysign`,
 `fabs`, `nextafter`, `ilogb` and others.
@@ -203,19 +201,33 @@ showed nothing at all; every one of its 48 functions still matched. The
 `semantics.txt` diff is what surfaced it. This is the concrete case for the
 rule that a port diffs both files.
 
-**Current state: worked around, not fixed.** `-fno-strict-aliasing` is set
-PUBLIC on the `simd` target and is documented in the README's compile lines —
-PUBLIC because the punning is in the header, so callers need it too.
+**Fixed 2026-09-17**, and `-fno-strict-aliasing` is gone with it.
 
-The real fix is to replace the casts with `memcpy`, with `std::bit_cast`
-(C++20, which this project already requires), or with access through the `w[]`
-union members added in Phase 1, after which the flag could be dropped. Worth
-doing before the next structural change: the failure is silent, produces
-plausible-looking numbers, and depends on inlining decisions that any edit can
-perturb.
+The casts are replaced by `to_bits()` and `from_bits()`, which go through
+backend primitives (`f32_as_i32` and friends, i.e. `_mm256_castps_si256` on
+x86, `vreinterpretq_*` on NEON). That is better than `memcpy` or
+`std::bit_cast`: it is a register-level reinterpret with no memory traffic, so
+it expresses exactly what the original casts meant without the round trip a
+byte-copy would imply.
 
-This is not ARM-specific. The same UB is in the x86 build; it simply has not
-been triggered there yet.
+Also applies to the generated code. `src/codegen.cpp` emitted 22 of these casts
+into `math.cpp`, and now emits `to_bits`/`from_bits` instead. The one raw
+intrinsic it emitted, `_mm256_movemask_pd`, becomes a `movemask(simd_i64)`
+helper, so the generated source no longer reaches into the backend or into
+private members -- the `friend simd_f64 asin(simd_f64 x);` declaration that
+existed only for that purpose is no longer needed.
+
+Confirmation: the 72 strict-aliasing warnings in item 6 are gone, leaving 11.
+On AArch64 `golden.txt` and `semantics.txt` are byte-identical across the
+change, and the regenerated `math.cpp` differs in exactly 22 lines, every one
+of them a punning site.
+
+A third motivation had accumulated by the time this was fixed, beyond the UB
+itself and the workaround: `-fno-strict-aliasing` perturbed GCC's alias
+analysis on x86, which changed its FMA contraction decisions (item 8), which
+made x86 and AArch64 disagree on about ten functions at the same commit. That
+broke the cross-architecture bit-exactness the whole validation strategy rests
+on. Removing the flag is what restores it.
 
 ## 8. Results depend on FMA contraction, so `golden.txt` is not stable across recompiles
 
