@@ -333,6 +333,10 @@ select, and `-INT_MIN` is not representable: on x86 it wraps back to `INT_MIN`
 with the sign bit still set, selecting `b`, while on NEON the result leaves the
 sign bit clear and selects `a`.
 
+UBSan confirms this is undefined behaviour rather than a backend quirk:
+`arm_neon.h:1682: signed integer overflow: 0 - -2147483648 cannot be
+represented in type 'int'`. Both answers are therefore equally unjustified.
+
 Not reachable from anything: the library and all generated code pass `0` or `1`
 here, and the probe includes the extreme values only to characterise the
 behaviour. Recorded because it is a genuine semantic difference between the
@@ -343,3 +347,69 @@ If it is ever worth fixing, the clean form is a comparison against zero rather
 than a negation — `mask != 0` — which has no representability edge. That would
 change `blend`'s behaviour for every mask outside `{0, 1}`, so it is a
 deliberate semantic change to both backends, not a port fix.
+
+## 12. The generator overflows an `int` computing factorials
+
+`src/codegen.cpp:1818` and the same pattern nearby, found by UBSan:
+
+```
+runtime error: signed integer overflow: 479001600 * 13 cannot be
+represented in type 'int'
+```
+
+`479001600` is `12!`; `13!` is `6227020800`, which does not fit in a 32-bit
+`int`. The f64 `expm1` generator builds its factorials in a local
+`int factorial[14]` array, so the last entry wraps:
+
+```c
+constexpr int N = 14;
+int factorial[N];
+...
+for (int n = 2; n < N; n++) {
+    factorial[n] = factorial[n - 1] * n;      /* overflows at n = 13 */
+}
+```
+
+Note that a correct `hiprec_real factorial(int n)` already exists at
+`codegen.cpp:23`; this local array shadows it.
+
+The emitted coefficient for that term is therefore wrong, identically on every
+architecture, which is exactly why no diff has ever shown it -- both sides
+compute the same wrong number. Whether it matters depends on how much that term
+contributes; `expm1`'s measured accuracy is 10 ULP in double precision, the
+worst in the table, which is at least consistent with a defective high-order
+coefficient.
+
+Fixing it changes the generated coefficients and so moves `golden.txt` on both
+architectures, which is why it is recorded rather than done inside the port.
+Use `double`, `long long`, or the existing `hiprec_real` helper.
+
+## 13. Add a sanitizer run to the validation routine
+
+Every check the project had was output-based -- `math.cpp`, `golden.txt`,
+`semantics.txt` and `simd_test` all compare numbers. None of them can see a
+program that computes the right answer by the wrong means.
+
+Two defects were found the first time AddressSanitizer and UBSan were pointed
+at it, both invisible to the existing checks:
+
+- `simd_f64(const simd_i64&)` and `simd_i64(const simd_f64&)` assigned lanes 0
+  through 3 unconditionally. With two lanes that is an out-of-bounds write on
+  every call, and `golden` was producing bit-exact output while overflowing a
+  stack buffer. Fixed; note that fixing it shifted five f64 functions by 1-2
+  ULP, so some of the earlier bit-exactness was being achieved *through* the
+  undefined behaviour.
+- The factorial overflow above, and confirmation that item 11's `blend`
+  divergence is UB rather than a difference of opinion between backends.
+
+So the routine should be: the correctness diffs, the speed A/B, **and**
+
+```bash
+cmake .. -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+make && ./golden >/dev/null && ./semantics >/dev/null
+```
+
+Both should be silent apart from the known `0 - -2147483648` from the probe's
+deliberate `INT_MIN` case. `simd_test` under ASan is slow enough to want a
+reduced `N_bit_shift`, and the probes cover the same code paths.

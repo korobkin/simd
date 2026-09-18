@@ -1056,10 +1056,9 @@ public:
 	}
 	inline simd_f64(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		lane(0) = (double) other[0];
-		lane(1) = (double) other[1];
-		lane(2) = (double) other[2];
-		lane(3) = (double) other[3];
+		for (int k = 0; k < (int) size(); k++) {
+			lane(k) = (double) other[k];
+		}
 	}
 	inline simd_f64 permute(simd_i64 indices) const {
 		CHECK_ALIGNMENT(this, 32);
@@ -1381,10 +1380,9 @@ inline simd_f64 fma(simd_f64 a, simd_f64 b, simd_f64 c) {
 }
 
 inline simd_i64::simd_i64(const simd_f64& other) {
-	w[0] = (long long) (other[0]);
-	w[1] = (long long) (other[1]);
-	w[2] = (long long) (other[2]);
-	w[3] = (long long) (other[3]);
+	for (int k = 0; k < (int) size(); k++) {
+		w[k] = (long long) (other[k]);
+	}
 }
 
 simd_f64 tgamma(simd_f64);

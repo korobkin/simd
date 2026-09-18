@@ -174,6 +174,14 @@ comparison convention above) and `golden.txt` (bit-exact output on fixed
 inputs, printed per scalar element so an 8-lane and a 4-lane run diff
 directly, with an FNV summary per function to localise a mismatch).
 
+**The full routine is four things, not one.** Diff both probe files; compare
+speed as an A/B of two builds run back to back in one session, never against a
+committed file (TODO item 9); and run the probes under AddressSanitizer and
+UBSan (TODO item 13). That last one exists because every other check is
+output-based and so cannot see a program that computes the right answer by
+writing out of bounds -- which is not hypothetical here, and cost some of the
+bit-exactness this document originally claimed.
+
 With the baseline in hand, the sequencing question is whether to go straight
 to native NEON or via SIMDe first.
 
@@ -308,11 +316,25 @@ dump is not committed because it is identical to it apart from `rsqrt`.
 `simd_backend_neon.hpp`, selected with `-DSIMD_NATIVE_NEON=ON`. The lane counts
 halve: 4 floats and 2 doubles against 8 and 4.
 
-**47 of 48 functions are bit-exact against `baseline/x86/golden.txt`** -- at
-half the vector width, on a different instruction set. `f32 rsqrt` is the only
-difference, reciprocal-estimate instructions being implementation-defined on
-both sides. The per-scalar-element dump format is what makes that comparison
-possible: the 4-lane and 8-lane runs diff line for line.
+**42 of 48 functions are bit-exact against `baseline/x86/golden.txt`** -- at
+half the vector width, on a different instruction set. The per-scalar-element
+dump format is what makes that comparison possible at all: the 4-lane and
+8-lane runs diff line for line.
+
+The six that differ are all accounted for. `f32 rsqrt` is a reciprocal
+estimate, implementation-defined on both sides. The other five -- `expm1`,
+`sinh`, `tanh`, `asinh`, `atanh`, all f64 -- are the chain in TODO item 10,
+which **x86 at HEAD also differs from that baseline in**, by 1-2 ULP in about
+5% of samples. In other words the two architectures have converged and the
+*baseline* is the outlier: it was captured before the port and both sides have
+since moved for understood reasons. Re-capturing it on x86 is the remaining
+step, and would be expected to bring this to 47 of 48.
+
+An earlier run of this comparison reported 47 of 48 against the same baseline.
+That was real but partly undeserved: two conversion constructors were writing
+out of bounds, and removing those writes shifted exactly this f64 chain. Some
+of that bit-exactness was being achieved *through* undefined behaviour. See
+TODO item 13.
 
 Speed, measured A/B against the SIMDe build in one session as TODO item 9
 requires: **geometric mean 1.65x over 42 functions**, with the largest gains
@@ -360,6 +382,12 @@ All three predicted functions needed it, and the third was worse than expected:
 invisible on x86, where both integer vectors are `__m256i`, and a compile error
 on NEON, where they are not -- the naming scheme doing its job.
 
+Two conversion constructors, `simd_f64(const simd_i64&)` and its inverse,
+assigned lanes 0 through 3 unconditionally -- an out-of-bounds write on every
+call at two lanes. `golden` was producing bit-exact output while overflowing a
+stack buffer, which no output comparison can detect; AddressSanitizer found it
+immediately. TODO item 13 adds a sanitizer pass to the validation routine.
+
 `src/test.cpp` needed no change: `posix_memalign` at 32 bytes is valid for
 16-byte types, and `N_bit_shift` simply means AArch64 samples half as many
 points, which is ample.
@@ -386,7 +414,8 @@ just a backend change.
 | 2 | Native NEON: backend, codegen re-parameterisation | done |
 | 3 | SVE | defer |
 
-Phases -1 to 2 are complete. There is a native AArch64 build that reproduces
-the x86 reference bit-for-bit except `rsqrt`, and runs 1.65x faster than the
-SIMDe one. What remains is optional: SVE on wider hardware, and the deferred
+Phases -1 to 2 are complete. There is a native AArch64 build that matches the x86
+reference on 42 of 48 functions, the six exceptions all understood (`rsqrt`,
+plus the five-function f64 chain x86 has also moved on), and runs 1.65x faster
+than the SIMDe one. What remains is optional: SVE on wider hardware, and the deferred
 items in TODO.md.
