@@ -564,9 +564,15 @@ inline simd_f32 abs(simd_f32 x) {
 	return fabs(x);
 }
 
+/* Selects b where mask is STRICTLY POSITIVE. That is not obvious and callers
+   rely on it: atan passes -1 or +3 here. It was previously written as
+   `mask = -mask` followed by a sign-bit test, which is the same predicate for
+   every representable value except INT_MIN, where the negation overflows --
+   undefined behaviour, and the two backends disagreed on the answer. The
+   comparison has no such edge and makes the predicate explicit. TODO item 11. */
 inline simd_f32 blend(simd_f32 a, simd_f32 b, simd_i32 mask) {
-	mask = -mask;
-	a.v = backend::f32_blendv(a.v, b.v, backend::i32_as_f32(mask.v));
+	const backend::i32v m = backend::i32_cmpgt(mask.v, backend::i32_set1(0));
+	a.v = backend::f32_blendv(a.v, b.v, backend::i32_as_f32(m));
 	return a;
 }
 
@@ -1281,9 +1287,10 @@ simd_f64 acos(simd_f64 x);
 
 simd_f64 atan(simd_f64 x);
 
+/* Selects b where mask is strictly positive; see the f32 overload above. */
 inline simd_f64 blend(simd_f64 a, simd_f64 b, simd_i64 mask) {
-	mask = -mask;
-	a.v = backend::f64_blendv(a.v, b.v, backend::i64_as_f64(mask.v));
+	const backend::i64v m = backend::i64_cmpgt(mask.v, backend::i64_set1(0));
+	a.v = backend::f64_blendv(a.v, b.v, backend::i64_as_f64(m));
 	return a;
 }
 

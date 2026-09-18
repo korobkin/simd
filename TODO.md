@@ -334,7 +334,7 @@ Fixing the out-of-bounds lane conversions (item 13) moved both builds, x86 back
 onto the baseline and NEON off it. The prediction that they had "converged" was
 made without re-measuring either and was simply wrong.
 
-## 11. `blend` disagrees between backends for a mask of `INT_MIN`
+## 11. `blend` disagrees between backends for a mask of `INT_MIN` — FIXED
 
 `baseline/x86/semantics.txt` against `baseline/aarch64-neon/semantics.txt`:
 
@@ -358,10 +358,27 @@ behaviour. Recorded because it is a genuine semantic difference between the
 backends rather than a rounding artefact, and because the `-mask` idiom is the
 sort of thing that gets copied.
 
-If it is ever worth fixing, the clean form is a comparison against zero rather
-than a negation — `mask != 0` — which has no representability edge. That would
-change `blend`'s behaviour for every mask outside `{0, 1}`, so it is a
-deliberate semantic change to both backends, not a port fix.
+Fixed 2026-09-18 with a comparison, `mask > 0`, which has no representability
+edge and states the predicate outright.
+
+**Note that `mask != 0`, suggested here originally, would have been wrong.**
+`blend` does not mean "nonzero selects b"; the `-mask` idiom followed by a
+sign-bit test means "**strictly positive** selects b", and callers rely on it.
+`atan` in `include/code.hpp` computes
+`left = -simd_f32(2) * s + simd_f32(1)` with `s = copysign(1, x)`, so it passes
+`-1` or `+3`, and expects `-1` to select `a`. Changing to `!= 0` would have
+selected `b` there and broken `atan` on both architectures. The lesson is
+narrow and worth keeping: the idiom being replaced encoded a predicate nobody
+had written down, and the replacement has to be checked against what callers
+actually pass, not against what the idiom looks like it means.
+
+`mask > 0` agrees with the old behaviour for every representable value except
+`INT_MIN`, where the negation was undefined. `golden.txt` does not move on
+either architecture, `semantics.txt` does not move on AArch64 at all, and on
+x86 only the `INT_MIN` row changes, from `20.0` to `10.0` — the mathematically
+sensible answer, `INT_MIN` not being positive.
+
+Both probes now run clean under AddressSanitizer and UBSan with zero reports.
 
 ## 12. The generator overflows an `int` computing factorials — FIXED
 
@@ -434,6 +451,6 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug \
 make && ./golden >/dev/null && ./semantics >/dev/null
 ```
 
-Both should be silent apart from the known `0 - -2147483648` from the probe's
-deliberate `INT_MIN` case. `simd_test` under ASan is slow enough to want a
-reduced `N_bit_shift`, and the probes cover the same code paths.
+Both should be **completely silent**; they are as of item 11, which removed the
+last report. `simd_test` under ASan is slow enough to want a reduced
+`N_bit_shift`, and the probes cover the same code paths.
