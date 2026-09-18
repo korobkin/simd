@@ -159,6 +159,11 @@ Available for both `simd_f32` and `simd_f64`:
 | hyperbolic | `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` |
 | special | `erf` `erfc` `tgamma` `lgamma` |
 | algebraic | `sqrt` `rsqrt` `cbrt` `hypot` `fma` |
+**`round` ties to even**, i.e. it follows `rint` rather than C's `round`:
+`round(2.5)` is `2`, where libm gives `3`. That is deliberate -- it is the
+argument reduction used by `sin`, `cos`, `exp` and `tgamma` -- but it will
+surprise callers who expect libm semantics.
+
 | rounding, sign, misc | `floor` `ceil` `round` `trunc` `rint` `nearbyint` `abs` `fabs` `copysign` `fmin` `fmax` `fmod` `fdim` `remainder` `frexp` `ldexp` `logb` `modf` `scalbn` `nextafter` `blend` |
 
 Across the current test suite the average error is a fraction of an ULP and the

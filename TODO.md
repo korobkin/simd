@@ -35,12 +35,12 @@ mismatches in 300,000 random comparisons, for both overloads. Note it uses
 `sign(y) | 1` rather than `copysign`, because `copysign` is declared further
 down the header than `nextafter`.
 
-## 2. `ilogb` is wrong for negative inputs
+## 2. `ilogb` is wrong for negative inputs — FIXED
 
 `include/simd.hpp:651` (f32), `:1325` (f64).
 
-`ilogb(-7.25f)` returns `258`; the correct answer is `2`. Every positive input
-tested is correct, and `frexp` handles the same value correctly.
+`ilogb(-7.25f)` returned `258` where the correct answer is `2`. Every positive
+input tested was correct, and `frexp` handles the same value correctly.
 
 ```c
 simd_i32 i = (simd_i32&) x;
@@ -49,12 +49,14 @@ i -= 127;
 ```
 
 The sign bit is never masked off, so for a negative argument it shifts down
-into the exponent field. Masking the magnitude before the shift
-(`i &= 0x7fffffff`) is the obvious fix. Worth checking the f64 path at the same
-time, and worth confirming against a denormal, which this sequence also does
-not handle.
+into the exponent field.
 
-## 3. `round` rounds half to even, unlike libm — DEFERRED
+Fixed 2026-09-18 by masking the magnitude before the shift, in both the f32 and
+f64 overloads. `ilogb(-7.25f)` now returns 2. Exactly one line of
+`semantics.txt` moved, confirming nothing generated calls it. Denormals are
+still not handled; that sequence assumes a normalised exponent field.
+
+## 3. `round` rounds half to even, unlike libm — RESOLVED, kept as-is
 
 `include/simd.hpp:559` (f32), `:1221` (f64).
 
@@ -70,8 +72,13 @@ Decide deliberately which behaviour is wanted. If half-to-even is intended,
 that is defensible for numerical work, but the name should not be `round` — or
 it should be documented, since callers will reasonably assume libm semantics.
 
-Deferred until after the AArch64 port (decided 2026-09-17). Until then the
-current behaviour is the specification: the NEON backend must use `vrndnq_f32`
+**Resolved 2026-09-18: the behaviour is kept and documented.** Ties-to-even is
+defensible for argument reduction and is what the library has always done, so
+changing it would move `sin`, `cos`, `exp` and `tgamma` for no benefit. The
+README and the `round` overloads in `simd.hpp` now say so explicitly, since a
+caller expecting libm semantics would otherwise be surprised.
+
+The current behaviour is therefore the specification: the NEON backend must use `vrndnq_f32`
 (ties to even), **not** `vrndaq_f32` (ties away), even though the latter is
 what the name `round` suggests. Substituting it would silently change `sin`,
 `cos`, `exp` and `tgamma` through their argument reduction.
@@ -80,10 +87,6 @@ what the name `round` suggests. Substituting it would silently change `sin`,
 ties-behaviour change moves four of its rows. `golden.txt` does not: its random
 samples essentially never land on an exact half-integer. Diff both when
 validating a port.
-
-When this is eventually settled, the cost is a re-capture of `golden.txt` on
-x86 *and* a re-verification on the ARM build, rather than the single re-capture
-it would have taken before the port.
 
 ## 4. The f32 FMA check in the semantics probe is a bad test — FIXED
 
@@ -159,7 +162,7 @@ With that in place the ARM build reproduces the x86 golden dump bit-for-bit
 except `rsqrt`. Revisit if SIMDe fixes this upstream — the override is guarded
 by nothing and will simply shadow a corrected implementation.
 
-## 6. Pre-existing warnings in simd.hpp
+## 6. Pre-existing warnings in simd.hpp — `rint` FIXED, rest left
 
 `-Wall` on `include/simd.hpp` reports 11 warnings, down from 83 once item 7
 removed the 72 strict-aliasing ones. None were introduced by the port; they are
@@ -167,9 +170,11 @@ on the x86 path too and are recorded here rather than fixed.
 - **8 × sign-compare.** `for (int i = 0; i < size(); i++)` against a `size_t`
   `size()`.
 - **2 × unused variable.** A dead `simd_f32 y;` in `scalbn`, and its f64 twin.
-- **1 × control reaches end of non-void function.** `rint` switches on
-  `fegetround()` with no `default:`, so an unexpected rounding mode returns
-  nothing. Worth a `default: return round(x);`.
+- **1 × control reaches end of non-void function — FIXED.** `rint` switched on
+  `fegetround()` with no `default:`, returning nothing for any rounding mode
+  outside the four standard ones. Both overloads now fold `FE_TONEAREST` into a
+  `default:`. No behaviour change for the four valid modes. The remaining 10
+  warnings are cosmetic and are left alone.
 
 ## 7. The type punning is undefined behaviour and has started to bite — FIXED
 
@@ -358,7 +363,7 @@ than a negation — `mask != 0` — which has no representability edge. That wou
 change `blend`'s behaviour for every mask outside `{0, 1}`, so it is a
 deliberate semantic change to both backends, not a port fix.
 
-## 12. The generator overflows an `int` computing factorials
+## 12. The generator overflows an `int` computing factorials — FIXED
 
 `src/codegen.cpp:1818` and the same pattern nearby, found by UBSan:
 
@@ -390,9 +395,18 @@ contributes; `expm1`'s measured accuracy is 10 ULP in double precision, the
 worst in the table, which is at least consistent with a defective high-order
 coefficient.
 
-Fixing it changes the generated coefficients and so moves `golden.txt` on both
-architectures, which is why it is recorded rather than done inside the port.
-Use `double`, `long long`, or the existing `hiprec_real` helper.
+Fixed 2026-09-18: the array is `double`, which represents factorials exactly
+well past 14!.
+
+**It made no difference to accuracy**, contrary to the speculation above that
+it might explain `expm1`'s error. f64 `expm1` stays at 10 ULP. The wrapped
+value was roughly 3.2x too large, but it is the coefficient of the x^13 term,
+and the generated `expm1` only evaluates its polynomial for small arguments --
+it calls `exp` elsewhere -- so that term never contributed enough to matter.
+A real defect and real undefined behaviour, with no observable consequence.
+
+It does move `golden.txt` on both architectures, in f64 `expm1` and the `sinh`,
+`tanh`, `asinh` and `atanh` built on it, so both baselines need re-capturing.
 
 ## 13. Add a sanitizer run to the validation routine
 

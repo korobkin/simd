@@ -612,6 +612,9 @@ inline simd_f32 atanh(simd_f32 x) {
 	return y + (x - sinhy / coshy) / (coshy * coshy);
 }
 
+/* NOTE: ties to EVEN, i.e. rint semantics, NOT C's round(), which is ties away
+   from zero -- round(2.5) is 2 here and 3 in libm. Deliberate and relied upon:
+   this is the argument reduction of sin, cos, exp and tgamma. TODO item 3. */
 inline simd_f32 round(simd_f32 x) {
 	simd_f32 result;
 	result.v = backend::f32_round_nearest(x.v);
@@ -711,7 +714,10 @@ inline simd_f32 tan(simd_f32 x) {
 }
 
 inline simd_i32 ilogb(simd_f32 x) {
-	simd_i32 i = to_bits(x);
+	/* The magnitude is masked first: the shift is logical, so without this a
+	   negative argument shifts its sign bit down into the exponent field and
+	   ilogb(-7.25f) returns 258 instead of 2. TODO item 2. */
+	simd_i32 i = to_bits(x) & simd_i32(0x7FFFFFFF);
 	i >>= 23;
 	i -= 127;
 	return i;
@@ -766,12 +772,15 @@ inline simd_f32 rint(simd_f32 x) {
 	switch (fegetround()) {
 	case FE_DOWNWARD:
 		return floor(x);
-	case FE_TONEAREST:
-		return round(x);
 	case FE_TOWARDZERO:
 		return trunc(x);
 	case FE_UPWARD:
 		return ceil(x);
+	case FE_TONEAREST:
+	default:
+		/* Without the default this returned nothing for any rounding mode
+		   outside the four standard ones. TODO item 6. */
+		return round(x);
 	}
 }
 
@@ -1320,6 +1329,7 @@ inline simd_f64 fmin(simd_f64 a, simd_f64 b) {
 	return a;
 }
 
+/* Ties to even, as the f32 overload above; see the note there. */
 inline simd_f64 round(simd_f64 x) {
 	simd_f64 result;
 	result.v = backend::f64_round_nearest(x.v);
@@ -1424,7 +1434,7 @@ inline simd_f64 modf(simd_f64 x, simd_f64* i) {
 }
 
 inline simd_i64 ilogb(simd_f64 x) {
-	simd_i64 i = to_bits(x);
+	simd_i64 i = to_bits(x) & simd_i64(0x7FFFFFFFFFFFFFFFLL);
 	i >>= 52;
 	i -= 1023;
 	return i;
@@ -1451,12 +1461,15 @@ inline simd_f64 rint(simd_f64 x) {
 	switch (fegetround()) {
 	case FE_DOWNWARD:
 		return floor(x);
-	case FE_TONEAREST:
-		return round(x);
 	case FE_TOWARDZERO:
 		return trunc(x);
 	case FE_UPWARD:
 		return ceil(x);
+	case FE_TONEAREST:
+	default:
+		/* Without the default this returned nothing for any rounding mode
+		   outside the four standard ones. TODO item 6. */
+		return round(x);
 	}
 }
 

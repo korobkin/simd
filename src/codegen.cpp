@@ -1815,7 +1815,11 @@ void double_funcs(FILE* fp) {
 		/* expm1 */
 
 		constexpr int N = 14;
-		int factorial[N];
+		/* double, not int: 13! is 6227020800 and overflows a 32-bit int, so
+		   the last coefficient this emitted was wrong -- identically on every
+		   architecture, which is why no diff ever showed it. Factorials are
+		   exact in double well past 14!. TODO item 12. */
+		double factorial[N];
 		factorial[0] = 1;
 		factorial[1] = 1;
 		for (int n = 2; n < N; n++) {
