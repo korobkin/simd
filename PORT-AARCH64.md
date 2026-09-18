@@ -321,14 +321,14 @@ half the vector width, on a different instruction set. The per-scalar-element
 dump format is what makes that comparison possible at all: the 4-lane and
 8-lane runs diff line for line.
 
-The six that differ are all accounted for. `f32 rsqrt` is a reciprocal
-estimate, implementation-defined on both sides. The other five -- `expm1`,
-`sinh`, `tanh`, `asinh`, `atanh`, all f64 -- are the chain in TODO item 10,
-which **x86 at HEAD also differs from that baseline in**, by 1-2 ULP in about
-5% of samples. In other words the two architectures have converged and the
-*baseline* is the outlier: it was captured before the port and both sides have
-since moved for understood reasons. Re-capturing it on x86 is the remaining
-step, and would be expected to bring this to 47 of 48.
+The six that differ are all accounted for, and the baseline is current -- x86
+at HEAD reproduces it exactly, so it is a valid oracle and AArch64 is the side
+that differs. `f32 rsqrt` is a reciprocal estimate, implementation-defined on
+both sides. The other five -- `expm1`, `sinh`, `tanh`, `asinh`, `atanh`, all
+f64 -- are the chain in TODO item 10: one bit-reinterpret in `exp2(simd_f64)`
+whose surrounding arithmetic is contracted slightly differently on the two
+targets, worth 1-2 ULP in about 5% of samples. `simd_test` accuracy is
+identical on both, so neither side is the wrong one.
 
 An earlier run of this comparison reported 47 of 48 against the same baseline.
 That was real but partly undeserved: two conversion constructors were writing
@@ -415,7 +415,7 @@ just a backend change.
 | 3 | SVE | defer |
 
 Phases -1 to 2 are complete. There is a native AArch64 build that matches the x86
-reference on 42 of 48 functions, the six exceptions all understood (`rsqrt`,
-plus the five-function f64 chain x86 has also moved on), and runs 1.65x faster
-than the SIMDe one. What remains is optional: SVE on wider hardware, and the deferred
+reference on 42 of 48 functions, with the six exceptions understood and bounded
+at 2 ULP (`rsqrt`, plus one f64 dependency chain), and runs 1.65x faster than
+the SIMDe one. What remains is optional: SVE on wider hardware, and the deferred
 items in TODO.md.

@@ -290,34 +290,44 @@ comparable; the speed column is not, and is kept only as a rough record.
 
 ## 10. x86 and AArch64 differ in five f64 functions by <= 2 ULP
 
-Traced to a single bit-reinterpret. `exp2(simd_f64)` contains one punning site,
-rewritten from `(simd_f64&) i` to `from_bits(i)` by item 7, and it compiles
-fractionally differently on the two targets:
+`expm1`, `sinh`, `tanh`, `asinh` and `atanh`, all double precision, differ by
+1-2 ULP in roughly 5% of samples. Everything else matches bit for bit except
+`f32 rsqrt`, which is a reciprocal estimate and implementation-defined on both
+sides.
+
+All five are one root: `exp2(simd_f64)` contains a single bit-reinterpret, and
+whether the surrounding arithmetic is contracted into FMAs differs slightly
+between the two targets.
 
 ```
-exp2(simd_f64)          the rewritten site
+exp2(simd_f64)
   `- exp(simd_f64)      calls exp2
        `- expm1(simd_f64)
             |- sinh  |- tanh  |- asinh  `- atanh
 ```
 
-`exp2` and `exp` do not themselves show a difference in `golden.txt`: their own
-512 samples happen not to land on a case where it matters. `expm1`'s do, and
-the four functions built on it inherit it. Differences are 1-2 ULP in the last
-hex digit, and `simd_test` accuracy is unchanged.
+`exp2` and `exp` do not show a difference themselves: their own 512 samples do
+not land on a case where it matters. `expm1`'s do, and the four functions built
+on it inherit it. `simd_test` accuracy is identical on both architectures, so
+neither side is the wrong one -- contraction is an optimiser choice and both
+results are legitimate.
 
-Note which side is the more trustworthy. The old form was undefined behaviour
-compiling by luck; the new one is well defined. Where they disagree, the
-post-item-7 result is the one computed by code that says what it means.
+Not worth chasing further. The divergence is bounded at 2 ULP, confined to one
+dependency chain, and understood. Pinning it would mean rewriting the
+contraction-sensitive expression in the generator with explicit `fma()` calls,
+which is a change to the emitted mathematics for a cosmetic gain.
 
-**`baseline/x86/golden.txt` is deliberately NOT re-captured.** Its job is to be
-the oracle for the NEON port, and the AArch64 SIMDe build reproduces it exactly
-apart from `rsqrt`, so a Phase 2 diff against it attributes cleanly to the new
-backend. Re-capturing on x86 would introduce five more expected differences
-into precisely the comparison the port depends on. The file therefore records
-what *both* architectures produced before item 7 and what AArch64 still
-produces; x86 at HEAD differs from it as described above. Re-capture once the
-port is finished and the oracle has done its job.
+**`baseline/x86/golden.txt` is current.** x86 at HEAD reproduces it exactly, so
+it is a valid oracle; the AArch64 NEON build is the side that differs, in the
+six functions above.
+
+Two earlier readings of this were wrong and are worth recording, because both
+came from reasoning about which build had moved rather than measuring it. When
+this was first noticed, after item 7 removed the punning, it was x86 that
+differed from the baseline and AArch64 that matched -- the opposite of now.
+Fixing the out-of-bounds lane conversions (item 13) moved both builds, x86 back
+onto the baseline and NEON off it. The prediction that they had "converged" was
+made without re-measuring either and was simply wrong.
 
 ## 11. `blend` disagrees between backends for a mask of `INT_MIN`
 
