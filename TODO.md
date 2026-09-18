@@ -70,7 +70,7 @@ Decide deliberately which behaviour is wanted. If half-to-even is intended,
 that is defensible for numerical work, but the name should not be `round` — or
 it should be documented, since callers will reasonably assume libm semantics.
 
-## 4. The f32 FMA check in the semantics probe is a bad test
+## 4. The f32 FMA check in the semantics probe is a bad test — FIXED
 
 `tools/baseline/semantics.cpp:260`.
 
@@ -84,3 +84,7 @@ input and its comment need changing: pick operands whose product is not
 representable, e.g. `1 + 2^-13` and `1 - 2^-13`.
 
 Flagged so nobody debugs the FMA implementation chasing this.
+
+Fixed 2026-09-17: operands changed to `1 + 2^-13` and `1 - 2^-11`, whose
+product is not representable, and the comment corrected. `semantics.txt` needs
+re-capturing on x86 for the two `fma exactness` lines to match.

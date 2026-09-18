@@ -253,11 +253,15 @@ int main() {
 	   NOT contracting the neighbouring subtract. Worth a direct check. */
 	hdr("fma exactness (double-double building block)");
 	{
-		simd_f32 a(1.0f + 0x1p-12f), b(1.0f - 0x1p-12f);
+		/* The operands must have a product that is NOT representable as a
+		   float, or there is no rounding error for the FMA to recover and the
+		   residual is legitimately zero. (1 +- 2^-12) fails that test:
+		   1 - 2^-24 is exactly representable. 2^-13 does not divide evenly. */
+		simd_f32 a(1.0f + 0x1p-13f), b(1.0f - 0x1p-11f);
 		simd_f32 p = a * b;
 		simd_f32 err = fma(a, b, -p);
 		printf("a*b       = %08x\n", bits32(p[0]));
-		printf("fma(a,b,-p)= %08x  (exact residual; must be nonzero here)\n", bits32(err[0]));
+		printf("fma(a,b,-p)= %08x  (exact residual; nonzero for these operands)\n", bits32(err[0]));
 		double ad = 1.0 + 0x1p-27, bd = 1.0 - 0x1p-27;
 		simd_f64 a2(ad), b2(bd);
 		simd_f64 p2 = a2 * b2;
