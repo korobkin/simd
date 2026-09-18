@@ -70,7 +70,7 @@ Decide deliberately which behaviour is wanted. If half-to-even is intended,
 that is defensible for numerical work, but the name should not be `round` — or
 it should be documented, since callers will reasonably assume libm semantics.
 
-## 4. The f32 FMA check in the semantics probe is a bad test — FIXED, baseline re-capture pending
+## 4. The f32 FMA check in the semantics probe is a bad test — FIXED
 
 `tools/baseline/semantics.cpp:260`.
 
@@ -92,23 +92,9 @@ is not enough for the operands to have differing exponents, or for the product
 to *look* awkward. The test is whether the exact product needs more than 24
 significant bits. Check a candidate with scalar `fmaf()` before trusting it.
 
-### Re-capturing `baseline/x86/semantics.txt`
-
-Needed because the two `fma exactness` lines in the committed baseline come
-from the old operands. Run on the x86 machine, on this branch, with a clean
-tree:
-
-```bash
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j
-cd ..
-g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
-    tools/baseline/semantics.cpp -Lbuild -lsimd -o build/semantics
-./build/semantics > baseline/x86/semantics.txt
-```
-
-Expect **exactly two changed lines**, both in the `fma exactness` section:
+Baseline re-captured on x86 (i5-1135G7, GCC 11.4) on 2026-09-17. The diff was
+exactly the two predicted lines, and the predicted values were confirmed
+independently with scalar `fmaf()` on x86 before the run:
 
 ```diff
 -a*b       = 3f7fffff
@@ -117,18 +103,7 @@ Expect **exactly two changed lines**, both in the `fma exactness` section:
 +fma(a,b,-p)= b2800000  (exact residual; nonzero for these operands)
 ```
 
-Those two values are exact IEEE arithmetic, not platform-dependent; they were
-computed with scalar `fmaf()` on the AArch64 box and must come out identical on
-x86. The `f64 a*b` and `f64 resid` lines below them do not change.
-
-Confirm nothing else moved before committing:
-
-```bash
-git diff --numstat baseline/x86/semantics.txt   # expect: 2  2  baseline/x86/semantics.txt
-git status --short                              # expect: only that one file
-```
-
-Any other difference is a real behavioural change on the x86 side and should be
-explained before the file is committed — the whole point of the baseline is
-that it does not drift silently. `golden.txt` does not exercise `fma()`
-directly and is unaffected.
+Nothing else in the file moved, so no x86 behaviour changed alongside it. The
+`f64` lines below are unaffected, as is `golden.txt`, which does not exercise
+`fma()` directly. The general re-capture procedure lives in
+[ARCH.md](ARCH.md).

@@ -116,8 +116,8 @@ simd_f32::mask(2): 3f800000 3f800000 00000000 00000000 00000000 00000000 0000000
 simd_i32::mask(2): 1 1 0 0 0 0 0 0
 
 ===== fma exactness (double-double building block) =====
-a*b       = 3f7fffff
-fma(a,b,-p)= 00000000  (exact residual; must be nonzero here)
+a*b       = 3f800000
+fma(a,b,-p)= b2800000  (exact residual; nonzero for these operands)
 f64 a*b   = 3ff0000000000000
 f64 resid = bc90000000000000
 
