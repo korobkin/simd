@@ -230,7 +230,7 @@ int main() {
 	{
 		const float xs[] = { 1.9f, -1.9f, 2.5f, -2.5f, 0.4f };
 		for (float x : xs) {
-			simd_i32 i(simd_f32(x));           /* float -> int  (truncating?) */
+			simd_i32 i{simd_f32(x)};           /* float -> int  (truncating?) */
 			simd_f32 f(simd_i32((int)x));      /* int   -> float */
 			printf("x=%-6.2f  simd_i32(simd_f32(x))=%-4d  simd_f32(simd_i32(%d))=%.1f\n",
 			       x, i[0], (int)x, f[0]);
