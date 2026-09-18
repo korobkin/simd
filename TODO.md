@@ -287,3 +287,34 @@ different moments. Compare A against B by building both commits and running
 them back to back in the same session, never against
 `baseline/x86/simd_test.txt`. The accuracy columns of that file are stable and
 comparable; the speed column is not, and is kept only as a rough record.
+
+## 10. x86 and AArch64 differ in five f64 functions by <= 2 ULP
+
+Traced to a single bit-reinterpret. `exp2(simd_f64)` contains one punning site,
+rewritten from `(simd_f64&) i` to `from_bits(i)` by item 7, and it compiles
+fractionally differently on the two targets:
+
+```
+exp2(simd_f64)          the rewritten site
+  `- exp(simd_f64)      calls exp2
+       `- expm1(simd_f64)
+            |- sinh  |- tanh  |- asinh  `- atanh
+```
+
+`exp2` and `exp` do not themselves show a difference in `golden.txt`: their own
+512 samples happen not to land on a case where it matters. `expm1`'s do, and
+the four functions built on it inherit it. Differences are 1-2 ULP in the last
+hex digit, and `simd_test` accuracy is unchanged.
+
+Note which side is the more trustworthy. The old form was undefined behaviour
+compiling by luck; the new one is well defined. Where they disagree, the
+post-item-7 result is the one computed by code that says what it means.
+
+**`baseline/x86/golden.txt` is deliberately NOT re-captured.** Its job is to be
+the oracle for the NEON port, and the AArch64 SIMDe build reproduces it exactly
+apart from `rsqrt`, so a Phase 2 diff against it attributes cleanly to the new
+backend. Re-capturing on x86 would introduce five more expected differences
+into precisely the comparison the port depends on. The file therefore records
+what *both* architectures produced before item 7 and what AArch64 still
+produces; x86 at HEAD differs from it as described above. Re-capture once the
+port is finished and the oracle has done its job.
