@@ -77,3 +77,116 @@ Ordered by effort.
   ULP columns against a known-good x86 run. Lane-masking behaviour and
   fused-multiply-add contraction differ between the two architectures and will
   show up as small ULP differences.
+
+# Capturing an x86 baseline
+
+The last note above says to compare ULP columns against a known-good x86 run.
+This section is the concrete procedure. **Run it on the x86 machine, on an
+unmodified checkout, before any porting work starts.** The artifacts it
+produces are what the AArch64 port is validated against; see
+[PORT-AARCH64.md](PORT-AARCH64.md) for how they are used.
+
+## Why `simd_test` output is not enough
+
+It is worth capturing, but it cannot serve as the reference on its own:
+
+- **It is not reproducible.** `src/test.cpp:1229` calls `srand(time(NULL))`,
+  so every run draws different inputs. Two runs on the *same* machine do not
+  produce the same numbers, which makes a cross-architecture `diff`
+  meaningless.
+- **It is aggregate.** It reports average and maximum ULP per function. A port
+  that is wrong for one narrow input range but fine elsewhere can easily hide
+  inside an average taken over two million samples.
+- **It never tests the primitives.** It exercises the transcendental functions
+  against libm. It never touches the comparison/mask/shift/permute/gather
+  layer underneath — which is exactly the layer a NEON port rewrites, and
+  where the unresolved 1-vs-`-1` comparison convention lives.
+
+So: capture `simd_test`, and capture three other things alongside it.
+
+## What to capture
+
+Five artifacts, into `baseline/x86/`:
+
+| file | what it is | why |
+|---|---|---|
+| `simd_test.txt` | `simd_test` stdout | headline ULP + speedup, for the README table |
+| `semantics.txt` | primitive conformance probe | settles the mask convention and the other per-primitive questions empirically |
+| `golden.txt` | bit-exact dump on fixed inputs | the oracle the ported backend is diffed against |
+| `math.cpp` | the generated `math.cpp` | the 8-lane generated source; needed when re-parameterising the generator for 4 lanes |
+| `env.txt` | compiler, flags, CPU | records which ISA the baseline was actually built with |
+
+Two programs for this already exist in the repo:
+[tools/baseline/semantics.cpp](tools/baseline/semantics.cpp) and
+[tools/baseline/golden.cpp](tools/baseline/golden.cpp).
+
+`golden.cpp` is designed to be diffable across architectures: it uses a fixed
+LCG rather than `rand()`, and prints **one line per scalar element** rather
+than per vector, so an 8-lane AVX2 run and a 4-lane NEON run yield files with
+identical line counts that `diff` compares directly.
+
+## Procedure
+
+```bash
+# 0. Unmodified checkout, release build.
+git status                       # confirm clean; record the commit
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j
+cd ..
+mkdir -p baseline/x86
+
+# 1. Environment. -march=native is what the build actually uses, so record
+#    what it expands to. _mm256_cvtpd_epi64 (simd.hpp:1230) needs AVX512DQ
+#    + AVX512VL, so note whether those appear.
+{
+  echo "== commit =="; git rev-parse HEAD; git status --short
+  echo "== g++ =="; g++ --version | head -1
+  echo "== cmake =="; cmake --version | head -1
+  echo "== cpu =="; lscpu | head -25
+  echo "== -march=native expansion =="
+  gcc -march=native -dM -E - </dev/null | grep -E '__AVX|__FMA|__SSE4' | sort
+} > baseline/x86/env.txt 2>&1
+
+# 2. The generated source. Architecture-independent coefficients, 8-lane
+#    packing -- both matter for the port.
+cp build/generated_code/src/math.cpp baseline/x86/math.cpp
+
+# 3. simd_test. Takes a while (N = 1 << 21 samples per function) and needs
+#    a few GB; the numbers are statistical, so one run is enough.
+./build/simd_test 2>&1 | tee baseline/x86/simd_test.txt
+
+# 4. The two probes.
+g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
+    tools/baseline/semantics.cpp -Lbuild -lsimd -o build/semantics
+./build/semantics > baseline/x86/semantics.txt
+
+g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
+    tools/baseline/golden.cpp -Lbuild -lsimd -o build/golden
+./build/golden > baseline/x86/golden.txt
+
+# 5. Commit.
+git add baseline/x86 && git commit -m "baseline: x86_64 reference run"
+```
+
+## Notes for the session running this
+
+- **The two probe programs were written on the ARM machine and have never been
+  compiled**, because `simd.hpp` does not build there at all. Compile errors
+  are expected and are yours to fix. Keep the fixes minimal and mechanical
+  (a wrong overload, a missing cast); if a probe references something that
+  does not exist in the API, delete that probe and say so rather than
+  inventing a replacement.
+- **Do not "fix" anything in `include/` or `src/` while doing this.** The
+  point is to record the current behaviour, including the parts that look
+  wrong. In particular `semantics.txt` is *expected* to show comparison
+  operators returning `-1` while `blend` treats `1` as true, and
+  `simd_i32::operator*` behaving as an even-lane 32x32->64 multiply. Those are
+  the findings, not bugs to repair in this pass.
+- **Report, don't just commit.** Alongside the artifacts, summarise: did
+  everything build cleanly; what does `semantics.txt` say the comparison
+  convention actually is; does `env.txt` show AVX512DQ/VL (i.e. was
+  `_mm256_cvtpd_epi64` compiled natively or would a plain-AVX2 machine have
+  failed); and did any `simd_test` function show a suspiciously large max ULP.
+- If `simd_test` is OOM-killed, lower `N_bit_shift` (`src/test.cpp:145`) and
+  note the value used in `simd_test.txt`.
