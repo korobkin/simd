@@ -113,10 +113,24 @@ quietly adopt the IEEE reading.
   `vshlq_s32` is arithmetic, so the port must use the unsigned form to match.
 
 [TODO.md](TODO.md) is the register for defects found and deliberately not
-fixed -- currently `ilogb` for negative inputs and `round` being half-to-even
-rather than half-away-from-zero. Reproduce them on ARM or fix them on x86
-first, but do not let a port silently change them: a mismatch against
-`golden.txt` should always have a known cause.
+fixed. Two are open, and **item 3 should be settled before Phase 0 rather than
+after**:
+
+- `ilogb` is wrong for negative inputs (`ilogb(-7.25)` returns 258). Isolated:
+  nothing in the generated code calls it, so fixing it changes `semantics.txt`
+  and nothing else.
+- `round` is half-to-even, where C's `round` is half-away-from-zero. **Not
+  isolated.** It appears nine times in the generated `math.cpp`, in the
+  argument reduction of `sin`, `cos`, `exp` and `tgamma`. Changing it changes
+  those four functions at exact half-integers.
+
+That second one is a decision, not a fix -- half-to-even is defensible for
+argument reduction, and the cheap outcome is to keep the behaviour and rename
+or document it. What matters for the port is that the decision is made while
+there is one architecture to re-capture instead of two. Random-sample dumps
+make this easy to get wrong: exact half-integers essentially never come up in
+512 random draws, so `golden.txt` may not move at all while the behaviour
+has in fact changed.
 
 ## Strategy
 
@@ -242,6 +256,21 @@ works natively.
   FMA being exact -- and on the compiler *not* contracting the neighbouring
   `sub` into another FMA. Build with `-ffp-contract=off` for these paths; GCC
   on ARM defaults to `fast`.
+- **Rounding: NEON has both nearest-modes, and the obvious choice is the wrong
+  one.** Measured on the target and checked against the baseline:
+
+  | current | NEON | behaviour |
+  |---|---|---|
+  | `round`, `rint`, `nearbyint` (`_MM_FROUND_TO_NEAREST_INT`) | `vrndnq_f32` | ties to **even** |
+  | -- | `vrndaq_f32` | ties **away** -- what C's `round` means |
+  | `trunc` (`_MM_FROUND_TO_ZERO`) | `vrndq_f32` | toward zero |
+  | `floor` | `vrndmq_f32` | toward -inf |
+  | `ceil` | `vrndpq_f32` | toward +inf |
+
+  A function called `round` invites `vrndaq_f32`, which would silently change
+  `sin`, `cos`, `exp` and `tgamma` through their argument reduction. Use
+  `vrndnq_f32` to match the baseline; see TODO item 3 before deciding
+  otherwise.
 - **`gather`** has no NEON equivalent; emulate with scalar loads. This is on
   the hot path of the generated `erf`/`tgamma`/`asin` code, so it is the most
   likely place for the speedup column to regress.
