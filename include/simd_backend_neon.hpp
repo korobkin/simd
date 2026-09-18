@@ -1,7 +1,7 @@
 #pragma once
 
 /* AArch64 NEON backend: the same primitive interface as simd_backend_x86.hpp,
- * implemented on 128-bit NEON. See PORT-AARCH64.md.
+ * implemented on 128-bit NEON. See ARCH.md.
  *
  * The lane counts are HALF the x86 ones -- 4 floats and 2 doubles, against 8
  * and 4. That is the whole difference between this file and the SIMDe backend,

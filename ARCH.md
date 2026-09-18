@@ -1,12 +1,10 @@
 # Architecture support
 
-> **Status.** The survey below describes the situation before the AArch64 port
-> started. The port is now done: the library builds and runs on AArch64 with a
-> native NEON backend, reproducing the x86 reference dump bit-for-bit except
-> `rsqrt`, and about 1.65x faster than the SIMDe route it went through first.
-> See [PORT-AARCH64.md](PORT-AARCH64.md); the analysis here is kept because it
-> is still the reasoning behind that plan. Of the four options it lists, the
-> port used 1 (SIMDe) as a stepping stone and landed on 3 (native NEON).
+> **Status.** The survey below describes the situation before the AArch64 port,
+> and is kept because it is the reasoning behind how it was done. Of the four
+> options it lists, the port used 1 (SIMDe) as a stepping stone and landed on 3
+> (a native NEON backend). What shipped is described under
+> [AArch64 backends](#aarch64-backends).
 
 Originally this library was x86_64-only. `include/simd.hpp` includes `<immintrin.h>` and
 uses 32 `__m256`/`__m128` types and ~150 `_mm*` intrinsics, with no alternative
@@ -86,12 +84,92 @@ Ordered by effort.
   fused-multiply-add contraction differ between the two architectures and will
   show up as small ULP differences.
 
+# AArch64 backends
+
+Two, selected at configure time. Both present the same API; only the lane
+counts and the speed differ.
+
+| | lanes (f32 / f64) | |
+|---|---|---|
+| **native NEON** | 4 / 2 | the default; no external dependency |
+| **SIMDe** | 8 / 4 | `-DSIMD_NATIVE_NEON=OFF`; ~1.65x slower, must be found or fetched |
+
+SIMDe emulates the AVX2 widths, so every 256-bit operation becomes two 128-bit
+ones. It was the stepping stone during the port and is kept as a fallback.
+
+`simd_f32::size()` is therefore **4** by default on AArch64 and 8 on x86.
+Anything written against the AVX2 widths needs checking against `size()`.
+
+## Known differences from x86
+
+At equal commit and flags, the native NEON build reproduces
+`baseline/x86/golden.txt` for 42 of 48 functions. All six exceptions are
+understood:
+
+- **`f32 rsqrt`** -- a reciprocal-square-root *estimate*, accurate to about 12
+  bits and implementation-defined on both architectures. It cannot agree.
+- **f64 `expm1`, `sinh`, `tanh`, `asinh`, `atanh`** -- one dependency chain,
+  differing by 1-2 ULP in about 5% of samples. See TODO item 10. `simd_test`
+  accuracy is identical on both, so neither side is the wrong one.
+
+`semantics.txt` differs only in the width-dependent sections: the layout line,
+the per-lane tables, `reduce_sum` and `mask()`.
+
+## Maintaining the NEON backend
+
+The traps are commented at each definition in
+[include/simd_backend_neon.hpp](include/simd_backend_neon.hpp), because every
+one of them is a silent behaviour change rather than a compile error. In short:
+`vminq_f32`/`vmaxq_f32` are IEEE minNum and return the non-NaN operand, where
+`_mm256_min_ps` is a plain `a < b ? a : b`; `vrndnq_f32` is ties-to-even and
+matches `_MM_FROUND_TO_NEAREST_INT`, where the `vrndaq_f32` that the name
+`round` suggests would change `sin`, `cos`, `exp` and `tgamma` through their
+argument reduction; `_CMP_NEQ_OS` is ordered, so NaN must compare false;
+`blendv` tests the sign bit, not nonzero-ness; the right shifts are logical
+despite the signed element type; and `i32_mul` reproduces `_mm256_mul_epi32`'s
+even-lane 32x32->64 behaviour rather than correcting it.
+
+Three generated functions are parameterised on the lane count in
+`src/codegen.cpp`, and a fourth thing follows from it: **the generated
+`math.cpp` is backend-specific**, since the generator reads the lane count from
+the type it was compiled against. `erf(simd_f32)` packs 4 branches per
+coefficient index and holds `size()/4` of them per vector; `asin(simd_f32)`
+packs 2 and holds `size()/2`; `asin(simd_f64)` indexes a table with one row per
+lane mask, so `2^lanes` rows of `lanes` wide.
+
+## Validating a change
+
+Four things, not one. The first three were all in place at some point while a
+defect went undetected, which is why the fourth is listed:
+
+1. **Diff both probes** against `baseline/x86/`. `golden.txt` alone is not
+   enough -- it is built from random samples, so behaviour that differs only on
+   special values (rounding ties, signed zero, NaN, denormals) can change
+   without moving a line of it. `semantics.txt` is what pins those.
+2. **Compare speed as an A/B**, building the two commits and running
+   `simd_test` back to back in one session. Never against the speed column of a
+   committed baseline: it varies with machine state, and the same machine has
+   produced 1.7x and 4.2x on the same commit. See TODO item 9.
+3. **Re-baseline deliberately after a flag change.** Results depend on FMA
+   contraction, which any optimiser perturbation can change, so a golden diff
+   after a flag change means re-capture and check `simd_test`; a golden diff
+   across architectures at fixed flags means a bug. See TODO item 8.
+4. **Run the probes under sanitizers.** Everything above compares numbers and
+   so cannot see a program that computes the right answer by writing out of
+   bounds -- which is not hypothetical here. See TODO item 13.
+
+```bash
+cmake .. -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+make && ./golden >/dev/null && ./semantics >/dev/null   # both silent
+```
+
 # Capturing an x86 baseline
 
 The last note above says to compare ULP columns against a known-good x86 run.
 This section is the concrete procedure. **It has been run** -- the artifacts
 are in `baseline/x86/` and are what the AArch64 port is validated against; see
-[PORT-AARCH64.md](PORT-AARCH64.md) for how they are used. The procedure is
+[ARCH.md](ARCH.md) for how they are used. The procedure is
 kept because the baseline has to be re-captured whenever a fix changes
 behaviour on x86.
 

@@ -9,123 +9,6 @@ several of these are visible in `baseline/x86/semantics.txt`, so a fix changes
 the reference the AArch64 port is diffed against.
 
 ---
-
-## 1. `nextafter` cannot step downwards — FIXED
-
-`include/simd.hpp:476` (f32), `:1671` (f64). Fixed 2026-09-17;
-`baseline/x86/semantics.txt` re-captured (one line changed).
-
-Kept here because the cause is worth remembering for the port. The old code was
-
-```c
-simd_i32 dir = y - x > simd_f32(0);
-i += dir;
-```
-
-and comparisons in this library return `1` or `0`, never `-1`, so `dir` was `0`
-whenever `y < x` — the bit pattern could only ever step up. Three further
-defects were hiding behind that one: floats are sign-magnitude, so the
-bit-space direction has to be reversed for negative `x`; `+-0` do not increment
-into their correct neighbours and need special-casing; and a NaN `y` cannot be
-detected with `y != y`, because `!=` returns `0` for NaN operands here —
-`!(y == y)` works.
-
-The replacement is verified against libm: 16/16 curated edge cases and 0
-mismatches in 300,000 random comparisons, for both overloads. Note it uses
-`sign(y) | 1` rather than `copysign`, because `copysign` is declared further
-down the header than `nextafter`.
-
-## 2. `ilogb` is wrong for negative inputs — FIXED
-
-`include/simd.hpp:651` (f32), `:1325` (f64).
-
-`ilogb(-7.25f)` returned `258` where the correct answer is `2`. Every positive
-input tested was correct, and `frexp` handles the same value correctly.
-
-```c
-simd_i32 i = (simd_i32&) x;
-i >>= 23;
-i -= 127;
-```
-
-The sign bit is never masked off, so for a negative argument it shifts down
-into the exponent field.
-
-Fixed 2026-09-18 by masking the magnitude before the shift, in both the f32 and
-f64 overloads. `ilogb(-7.25f)` now returns 2. Exactly one line of
-`semantics.txt` moved, confirming nothing generated calls it. Denormals are
-still not handled; that sequence assumes a normalised exponent field.
-
-## 3. `round` rounds half to even, unlike libm — RESOLVED, kept as-is
-
-`include/simd.hpp:559` (f32), `:1221` (f64).
-
-`round(2.5)` gives `2` and `round(-2.5)` gives `-2`. C's `round` is half away
-from zero and gives `3` and `-3`. Across the eight inputs in the probe, this
-function's output is byte-identical to `rint`, and `lround` agrees with it.
-
-The cause is `_MM_FROUND_TO_NEAREST_INT`, which is round-half-to-even. There is
-no single AVX intrinsic for half-away-from-zero; the usual construction is
-`trunc(x + copysign(0.5, x))`.
-
-Decide deliberately which behaviour is wanted. If half-to-even is intended,
-that is defensible for numerical work, but the name should not be `round` — or
-it should be documented, since callers will reasonably assume libm semantics.
-
-**Resolved 2026-09-18: the behaviour is kept and documented.** Ties-to-even is
-defensible for argument reduction and is what the library has always done, so
-changing it would move `sin`, `cos`, `exp` and `tgamma` for no benefit. The
-README and the `round` overloads in `simd.hpp` now say so explicitly, since a
-caller expecting libm semantics would otherwise be surprised.
-
-The current behaviour is therefore the specification: the NEON backend must use `vrndnq_f32`
-(ties to even), **not** `vrndaq_f32` (ties away), even though the latter is
-what the name `round` suggests. Substituting it would silently change `sin`,
-`cos`, `exp` and `tgamma` through their argument reduction.
-
-`semantics.txt` guards this — it covers `±0.5`, `±1.5` and `±2.5`, so a
-ties-behaviour change moves four of its rows. `golden.txt` does not: its random
-samples essentially never land on an exact half-integer. Diff both when
-validating a port.
-
-## 4. The f32 FMA check in the semantics probe is a bad test — FIXED
-
-`tools/baseline/semantics.cpp:260`.
-
-The comment asserted the residual "must be nonzero here". It is zero, and that
-is correct: `(1 + 2^-12)*(1 - 2^-12) = 1 - 2^-24`, which is exactly
-representable as a float, so there is no rounding error for the FMA to recover.
-
-Not a library defect — the library is fine, and the f64 case immediately below
-does exercise the path properly, returning exactly `-2^-54`.
-
-Fixed 2026-09-17. Operands are now `1 + 2^-13` and `1 - 2^-13`, whose product
-`1 - 2^-26` needs 26 bits below the leading one and so does not fit a float's
-24-bit significand; it rounds to `1.0` and leaves a residual of `-2^-26`.
-
-A first attempt used `1 + 2^-13` and `1 - 2^-11` and was wrong in the same way
-as the original — that product is `1 - 2^-11 + 2^-13 - 2^-24`, which is again
-exactly representable, and the residual was again zero. Worth remembering: it
-is not enough for the operands to have differing exponents, or for the product
-to *look* awkward. The test is whether the exact product needs more than 24
-significant bits. Check a candidate with scalar `fmaf()` before trusting it.
-
-Baseline re-captured on x86 (i5-1135G7, GCC 11.4) on 2026-09-17. The diff was
-exactly the two predicted lines, and the predicted values were confirmed
-independently with scalar `fmaf()` on x86 before the run:
-
-```diff
--a*b       = 3f7fffff
--fma(a,b,-p)= 00000000  (exact residual; must be nonzero here)
-+a*b       = 3f800000
-+fma(a,b,-p)= b2800000  (exact residual; nonzero for these operands)
-```
-
-Nothing else in the file moved, so no x86 behaviour changed alongside it. The
-`f64` lines below are unaffected, as is `golden.txt`, which does not exercise
-`fma()` directly. The general re-capture procedure lives in
-[ARCH.md](ARCH.md).
-
 ## 5. SIMDe's 256-bit FMA is not fused on NEON — WORKED AROUND
 
 `include/simd.hpp`, the SIMDe branch at the top. Found during Phase 1 of the
@@ -185,64 +68,6 @@ on the x86 path too and are recorded here rather than fixed.
   outside the four standard ones. Both overloads now fold `FE_TONEAREST` into a
   `default:`. No behaviour change for the four valid modes. The remaining 10
   warnings are cosmetic and are left alone.
-
-## 7. The type punning is undefined behaviour and has started to bite — FIXED
-
-`include/simd.hpp`, ~70 sites: `ldexp`, `frexp`, `scalbn`, `hypot`, `copysign`,
-`fabs`, `nextafter`, `ilogb` and others.
-
-The library reinterprets a `simd_i32` as a `simd_f32` and back with casts of
-the form
-
-```c
-simd_i32 i = (simd_i32&) x;      /* read the float's bits as integers  */
-...
-return (simd_f32&) i;            /* and back                           */
-```
-
-This is undefined behaviour. The two classes are layout-compatible, so it does
-what is intended as long as the compiler does not act on the assumption that an
-`int` and a `float` object cannot overlap — and it had been doing what was
-intended only by luck.
-
-Introducing the backend layer in Phase 2 changed the inlining enough for GCC to
-start acting on that assumption. It reordered the punned read before the write
-that produced it, and `ldexp(1.0f, 3)` returned `0x00000082` — a denormal,
-being the exponent field left unshifted — where `8.0` (`0x41000000`) was
-expected. `ldexp`'s own source was untouched by the refactor.
-
-Worth noting how it was caught. `golden.txt` does not exercise `ldexp` and
-showed nothing at all; every one of its 48 functions still matched. The
-`semantics.txt` diff is what surfaced it. This is the concrete case for the
-rule that a port diffs both files.
-
-**Fixed 2026-09-17**, and `-fno-strict-aliasing` is gone with it.
-
-The casts are replaced by `to_bits()` and `from_bits()`, which go through
-backend primitives (`f32_as_i32` and friends, i.e. `_mm256_castps_si256` on
-x86, `vreinterpretq_*` on NEON). That is better than `memcpy` or
-`std::bit_cast`: it is a register-level reinterpret with no memory traffic, so
-it expresses exactly what the original casts meant without the round trip a
-byte-copy would imply.
-
-Also applies to the generated code. `src/codegen.cpp` emitted 22 of these casts
-into `math.cpp`, and now emits `to_bits`/`from_bits` instead. The one raw
-intrinsic it emitted, `_mm256_movemask_pd`, becomes a `movemask(simd_i64)`
-helper, so the generated source no longer reaches into the backend or into
-private members -- the `friend simd_f64 asin(simd_f64 x);` declaration that
-existed only for that purpose is no longer needed.
-
-Confirmation: the 72 strict-aliasing warnings in item 6 are gone, leaving 11.
-On AArch64 `golden.txt` and `semantics.txt` are byte-identical across the
-change, and the regenerated `math.cpp` differs in exactly 22 lines, every one
-of them a punning site.
-
-A third motivation had accumulated by the time this was fixed, beyond the UB
-itself and the workaround: `-fno-strict-aliasing` perturbed GCC's alias
-analysis on x86, which changed its FMA contraction decisions (item 8), which
-made x86 and AArch64 disagree on about ten functions at the same commit. That
-broke the cross-architecture bit-exactness the whole validation strategy rests
-on. Removing the flag is what restores it.
 
 ## 8. Results depend on FMA contraction, so `golden.txt` is not stable across recompiles
 
@@ -344,97 +169,6 @@ Fixing the out-of-bounds lane conversions (item 13) moved both builds, x86 back
 onto the baseline and NEON off it. The prediction that they had "converged" was
 made without re-measuring either and was simply wrong.
 
-## 11. `blend` disagrees between backends for a mask of `INT_MIN` — FIXED
-
-`baseline/x86/semantics.txt` against `baseline/aarch64-neon/semantics.txt`:
-
-```
-mask=-2147483648  x86  f32 -> 20.0     NEON  f32 -> 10.0
-```
-
-Every other mask in the probe agrees, including `0`, `1`, `-1`, `2`, `-2` and
-`INT_MAX`. `blend` resolves its mask as `mask = -mask` followed by a sign-bit
-select, and `-INT_MIN` is not representable: on x86 it wraps back to `INT_MIN`
-with the sign bit still set, selecting `b`, while on NEON the result leaves the
-sign bit clear and selects `a`.
-
-UBSan confirms this is undefined behaviour rather than a backend quirk:
-`arm_neon.h:1682: signed integer overflow: 0 - -2147483648 cannot be
-represented in type 'int'`. Both answers are therefore equally unjustified.
-
-Not reachable from anything: the library and all generated code pass `0` or `1`
-here, and the probe includes the extreme values only to characterise the
-behaviour. Recorded because it is a genuine semantic difference between the
-backends rather than a rounding artefact, and because the `-mask` idiom is the
-sort of thing that gets copied.
-
-Fixed 2026-09-18 with a comparison, `mask > 0`, which has no representability
-edge and states the predicate outright.
-
-**Note that `mask != 0`, suggested here originally, would have been wrong.**
-`blend` does not mean "nonzero selects b"; the `-mask` idiom followed by a
-sign-bit test means "**strictly positive** selects b", and callers rely on it.
-`atan` in `include/code.hpp` computes
-`left = -simd_f32(2) * s + simd_f32(1)` with `s = copysign(1, x)`, so it passes
-`-1` or `+3`, and expects `-1` to select `a`. Changing to `!= 0` would have
-selected `b` there and broken `atan` on both architectures. The lesson is
-narrow and worth keeping: the idiom being replaced encoded a predicate nobody
-had written down, and the replacement has to be checked against what callers
-actually pass, not against what the idiom looks like it means.
-
-`mask > 0` agrees with the old behaviour for every representable value except
-`INT_MIN`, where the negation was undefined. `golden.txt` does not move on
-either architecture, `semantics.txt` does not move on AArch64 at all, and on
-x86 only the `INT_MIN` row changes, from `20.0` to `10.0` — the mathematically
-sensible answer, `INT_MIN` not being positive.
-
-Both probes now run clean under AddressSanitizer and UBSan with zero reports.
-
-## 12. The generator overflows an `int` computing factorials — FIXED
-
-`src/codegen.cpp:1818` and the same pattern nearby, found by UBSan:
-
-```
-runtime error: signed integer overflow: 479001600 * 13 cannot be
-represented in type 'int'
-```
-
-`479001600` is `12!`; `13!` is `6227020800`, which does not fit in a 32-bit
-`int`. The f64 `expm1` generator builds its factorials in a local
-`int factorial[14]` array, so the last entry wraps:
-
-```c
-constexpr int N = 14;
-int factorial[N];
-...
-for (int n = 2; n < N; n++) {
-    factorial[n] = factorial[n - 1] * n;      /* overflows at n = 13 */
-}
-```
-
-Note that a correct `hiprec_real factorial(int n)` already exists at
-`codegen.cpp:23`; this local array shadows it.
-
-The emitted coefficient for that term is therefore wrong, identically on every
-architecture, which is exactly why no diff has ever shown it -- both sides
-compute the same wrong number. Whether it matters depends on how much that term
-contributes; `expm1`'s measured accuracy is 10 ULP in double precision, the
-worst in the table, which is at least consistent with a defective high-order
-coefficient.
-
-Fixed 2026-09-18: the array is `double`, which represents factorials exactly
-well past 14!.
-
-**It made no difference to accuracy**, contrary to the speculation above that
-it might explain `expm1`'s error. f64 `expm1` stays at 10 ULP. The wrapped
-value was roughly 3.2x too large, but it is the coefficient of the x^13 term,
-and the generated `expm1` only evaluates its polynomial for small arguments --
-it calls `exp` elsewhere -- so that term never contributed enough to matter.
-A real defect and real undefined behaviour, with no observable consequence.
-
-It does move `golden.txt` on both architectures, in f64 `expm1` and the `sinh`,
-`tanh`, `asinh` and `atanh` built on it, so both baselines need re-capturing.
-
 ## 13. Add a sanitizer run to the validation routine
 
 Every check the project had was output-based -- `math.cpp`, `golden.txt`,
@@ -464,3 +198,18 @@ make && ./golden >/dev/null && ./semantics >/dev/null
 Both should be **completely silent**; they are as of item 11, which removed the
 last report. `simd_test` under ASan is slow enough to want a reduced
 `N_bit_shift`, and the probes cover the same code paths.
+## Closed
+
+Fixed or resolved, and removed from the list above. Numbers are kept because
+comments in the source cite them; `git log` has the detail.
+
+- **1.** `nextafter` could only step upwards; sign-magnitude, +-0 and NaN were wrong with it
+- **2.** `ilogb` shifted a negative argument's sign bit into the exponent field
+- **3.** `round` ties to even, not libm's ties-away -- kept deliberately, documented in the README
+- **4.** the probe's f32 FMA check used operands whose product was exactly representable
+- **7.** the `(simd_i32&)` type punning was undefined behaviour and had begun to miscompile
+- **11.** `blend` negated its mask, which is undefined for INT_MIN -- now an explicit `mask > 0`
+- **12.** the generator built factorials in an `int` and overflowed at 13!
+
+All seven were pre-existing defects on the x86 path. None was introduced by
+the AArch64 port; the port is what made them visible.

@@ -7,7 +7,7 @@ include(CheckCXXCompilerFlag)
 
 # --- SIMD instruction set ----------------------------------------------------
 # The vector backend in include/simd.hpp is x86_64-only today; see ARCH.md and
-# PORT-AARCH64.md. These flags are selected per architecture so that configuring
+# ARCH.md. These flags are selected per architecture so that configuring
 # on AArch64 succeeds and the build then fails on the missing <immintrin.h> --
 # the real blocker -- rather than on an unrecognised -mavx2, which says nothing
 # useful. The flags are probed rather than assumed: Apple clang on arm64 rejects
@@ -91,7 +91,7 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 # --- SIMDe -------------------------------------------------------------------
-# Phase 1 of the AArch64 port (PORT-AARCH64.md): SIMDe reimplements the Intel
+# Phase 1 of the AArch64 port (ARCH.md): SIMDe reimplements the Intel
 # intrinsics over NEON, keeping the AVX2 lane counts so nothing else has to
 # change yet. x86_64 uses <immintrin.h> and never sees this.
 # The native NEON backend, 4 float / 2 double lanes. Default ON for AArch64:
@@ -102,7 +102,7 @@ find_package(Threads REQUIRED)
 #
 # Note this makes simd_f32::size() 4 rather than 8 by default on AArch64. That
 # breaks nobody, AArch64 support being new in the same work, but code written
-# against the AVX2 widths needs checking -- see PORT-AARCH64.md.
+# against the AVX2 widths needs checking -- see ARCH.md.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 	set(SIMD_NATIVE_NEON_DEFAULT ON)
 else()
@@ -118,7 +118,7 @@ if(SIMD_NATIVE_NEON)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 	message(STATUS
 		"simd: backend: SIMDe over NEON (8 float / 4 double lanes). The native "
-		"backend is faster; see PORT-AARCH64.md."
+		"backend is faster; see ARCH.md."
 	)
 endif()
 

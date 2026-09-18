@@ -1,7 +1,7 @@
 #pragma once
 
 /* The vector primitives live in a per-architecture backend header; see
-   PORT-AARCH64.md. Everything below is written against that interface, so a
+   ARCH.md. Everything below is written against that interface, so a
    new architecture is a new backend rather than edits throughout this file. */
 #if defined(__aarch64__) && defined(SIMD_NATIVE_NEON)
 #include "simd_backend_neon.hpp"
@@ -300,7 +300,7 @@ class simd_f32 {
 	/* Only where the backend's vector type cannot be subscripted. On the
 	   native backend the bare member is essential: adding the array alongside
 	   it defeats GCC's register promotion of this class and measured 2.5x
-	   slower on x86. See PORT-AARCH64.md. */
+	   slower on x86. See ARCH.md. */
 	union {
 		backend::f32v v;
 		float w[backend::f32_lanes];
@@ -1032,7 +1032,7 @@ class simd_f64 {
 	/* Only where the backend's vector type cannot be subscripted. On the
 	   native backend the bare member is essential: adding the array alongside
 	   it defeats GCC's register promotion of this class and measured 2.5x
-	   slower on x86. See PORT-AARCH64.md. */
+	   slower on x86. See ARCH.md. */
 	union {
 		backend::f64v v;
 		double w[backend::f64_lanes];

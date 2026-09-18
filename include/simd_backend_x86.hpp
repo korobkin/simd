@@ -9,7 +9,7 @@
  * math.cpp and the buffer sizing in src/test.cpp stay as they are.
  *
  * A native NEON backend, where the lane counts actually change, is
- * simd_backend_neon.hpp. See PORT-AARCH64.md.
+ * simd_backend_neon.hpp. See ARCH.md.
  *
  * Naming is <type>_<operation>, not overloading, because on x86 the 32- and
  * 64-bit integer vectors are the same type (__m256i) and overloads on them

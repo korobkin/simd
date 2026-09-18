@@ -316,7 +316,7 @@ void float_funcs(FILE* fp) {
 		/* Four branches per coefficient index, so one vector holds
 		   size()/4 of them: 2 on AVX2, 1 on NEON. The packing factor, the
 		   width of each emitted initializer and the number of index vectors
-		   all follow from it. See PORT-AARCH64.md. */
+		   all follow from it. See ARCH.md. */
 		const int CPV = (int) simd::simd_f32::size() / 4;
 		fprintf(fp, "simd_f32 erf(simd_f32 x) {\n");
 		fprintf(fp, "\tstatic const simd_f32 co[] = {\n");
@@ -778,7 +778,7 @@ void float_funcs(FILE* fp) {
 		}
 		fprintf(fp, "\n");
 		/* Two branches per coefficient index, so a vector holds size()/2 of
-		   them: 4 on AVX2, 2 on NEON. See PORT-AARCH64.md. */
+		   them: 4 on AVX2, 2 on NEON. See ARCH.md. */
 		const int CPV = (int) simd::simd_f32::size() / 2;
 		fprintf(fp, "simd_f32 asin(simd_f32 x) {\n");
 		fprintf(fp, "\tsimd_f32 y, s, z, x0, x1;\n");
@@ -1605,7 +1605,7 @@ void double_funcs(FILE* fp) {
 		fprintf(fp, "\tsize_t j;\n");
 		/* One row per possible lane mask, so 2^lanes of them, each row a
 		   vector wide. 16 rows of 4 on AVX2, 4 rows of 2 on NEON. The
-		   emission is driven by the lane count; see PORT-AARCH64.md. */
+		   emission is driven by the lane count; see ARCH.md. */
 		const int LANES = (int) simd::simd_f64::size();
 		const int NROWS = 1 << LANES;
 		fprintf(fp, "\tstatic const simd_f64 co[][%i] = {\n", N);
