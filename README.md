@@ -13,20 +13,26 @@ types in C.
 
 ## Installation
 
-Architectures: **x86_64** natively, requiring AVX2 and FMA, and **AArch64**
-through [SIMDe](https://github.com/simd-everywhere/simde), which reimplements
-the Intel intrinsics over NEON. The ARM build is correct -- it reproduces the
-x86 results bit-for-bit apart from `rsqrt`, an implementation-defined
-approximation -- but makes no speed claim, since every 256-bit operation
-becomes two 128-bit ones. A native NEON backend is planned; see
-[PORT-AARCH64.md](PORT-AARCH64.md).
+Architectures: **x86_64**, requiring AVX2 and FMA, and **AArch64**, with two
+backends. Both reproduce the x86 results bit-for-bit apart from `rsqrt`, an
+implementation-defined approximation.
 
-On AArch64, CMake looks for SIMDe and fetches it if absent. To use an existing
-checkout instead:
+- **Native NEON** (`-DSIMD_NATIVE_NEON=ON`) is the one to use. 4 float and
+  2 double lanes, and about 1.65x faster than the SIMDe build.
+- **SIMDe** is the default, and needs no `arm_neon.h` knowledge from callers.
+  It reimplements the Intel intrinsics over NEON, keeping the AVX2 lane counts,
+  so every 256-bit operation becomes two 128-bit ones. Correct, but slower.
 
 ```bash
-   cmake .. -DCMAKE_BUILD_TYPE=Release -DSIMDE_INCLUDE_DIR=/path/to/simde
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DSIMD_NATIVE_NEON=ON
 ```
+
+For the SIMDe backend, CMake looks for SIMDe and fetches it if absent; to use
+an existing checkout instead, add `-DSIMDE_INCLUDE_DIR=/path/to/simde`.
+
+Note that `size()` differs between them: a `simd_f32` holds 8 floats on x86 and
+under SIMDe, and 4 under native NEON. Code that assumes a width needs checking
+against `size()`.
 
 Prerequisites:
  - gmp, gmp-devel library;
@@ -82,7 +88,13 @@ compile with the SIMD instruction set enabled. On x86_64:
 g++ -std=c++20 -march=native -mavx2 -I../include main.cpp -L. -lsimd
 ```
 
-On AArch64, drop `-mavx2` and add the SIMDe include path:
+On AArch64 with the native NEON backend, drop `-mavx2`:
+
+```bash
+g++ -std=c++20 -march=native -DSIMD_NATIVE_NEON -I../include main.cpp -L. -lsimd
+```
+
+or, for the SIMDe backend, add its include path instead:
 
 ```bash
 g++ -std=c++20 -march=native -I../include -I/path/to/simde main.cpp -L. -lsimd
@@ -90,8 +102,8 @@ g++ -std=c++20 -march=native -I../include -I/path/to/simde main.cpp -L. -lsimd
 
 From CMake, link the `simd::simd` target, which already carries the include
 directory and the instruction-set flags chosen for the target architecture
-(`-march=native -mavx2` on x86_64, `-march=native` plus the SIMDe include path
-on AArch64):
+(`-march=native -mavx2` on x86_64, `-march=native` on AArch64, plus the
+backend selection):
 
 ```cmake
 add_subdirectory(external/simd)

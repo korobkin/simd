@@ -202,7 +202,7 @@ correct before touching it. But this is a judgement call, not a constraint.
 Phase -1  x86 baseline capture   -> DONE; baseline/x86/
 Phase 0   build unblock          -> DONE; cmake configures per architecture
 Phase 1   SIMDe backend          -> DONE; baseline/aarch64-simde/
-Phase 2   native NEON backend    -> diffed against baseline/x86/golden.txt
+Phase 2   native NEON backend    -> DONE; baseline/aarch64-neon/
 Phase 3   SVE (optional)         -> only worthwhile on wider hardware
 ```
 
@@ -303,87 +303,70 @@ Both are expected and neither indicates a defect:
 `baseline/x86/golden.txt` remains the canonical oracle for Phase 2; the ARM
 dump is not committed because it is identical to it apart from `rsqrt`.
 
-## Phase 2 -- native NEON backend
+## Phase 2 -- native NEON backend -- DONE
 
-Only now does the width change. The work:
+`simd_backend_neon.hpp`, selected with `-DSIMD_NATIVE_NEON=ON`. The lane counts
+halve: 4 floats and 2 doubles against 8 and 4.
 
-**Mechanical.** 70 distinct intrinsics across 149 call sites, 32 `__m256`/
-`__m128` type mentions, four classes (`simd_i32` 26-270, `simd_f32` 282-455,
-`simd_i64` 723-947, `simd_f64` 950-1128) plus `simd_f32_2`/`simd_f64_2`.
-Most map one-to-one: `_mm256_add_ps` -> `vaddq_f32`, `_mm256_sqrt_pd` ->
-`vsqrtq_f64`, `_mm256_blendv_ps` -> `vbslq_f32`, `_mm256_movemask_pd` -> a
-narrow-and-reduce. NEON types keep GCC vector subscripting, so the `v[i]` idiom
-works natively.
+**47 of 48 functions are bit-exact against `baseline/x86/golden.txt`** -- at
+half the vector width, on a different instruction set. `f32 rsqrt` is the only
+difference, reciprocal-estimate instructions being implementation-defined on
+both sides. The per-scalar-element dump format is what makes that comparison
+possible: the 4-lane and 8-lane runs diff line for line.
 
-**Needs care:**
+Speed, measured A/B against the SIMDe build in one session as TODO item 9
+requires: **geometric mean 1.65x over 42 functions**, with the largest gains
+where SIMDe was worst -- f32 `asin` 0.37x to 2.33x, f32 `erf` 0.88x to 4.19x,
+f32 `atan` 0.32x to 1.47x. Most single-precision functions now beat scalar
+libm by 2-5x. Double precision is mixed and several remain below 1.0x, which
+is what two lanes buys. ULP is unchanged throughout.
 
-- **`fmsub`.** `_mm256_fmsub_ps(a,b,c) = a*b - c`; NEON `vfmaq_f32(c,a,b) =
-  c + a*b`. So `vfmaq_f32(vnegq_f32(c), a, b)`. This sits inside
-  `simd_f32_2::two_product`, where the double-double arithmetic depends on the
-  FMA being exact -- and on the compiler *not* contracting the neighbouring
-  `sub` into another FMA. Build with `-ffp-contract=off` for these paths; GCC
-  on ARM defaults to `fast`.
-- **Rounding: NEON has both nearest-modes, and the obvious choice is the wrong
-  one.** Measured on the target and checked against the baseline:
+### Where the obvious NEON instruction is the wrong one
 
-  | current | NEON | behaviour |
-  |---|---|---|
-  | `round`, `rint`, `nearbyint` (`_MM_FROUND_TO_NEAREST_INT`) | `vrndnq_f32` | ties to **even** |
-  | -- | `vrndaq_f32` | ties **away** -- what C's `round` means |
-  | `trunc` (`_MM_FROUND_TO_ZERO`) | `vrndq_f32` | toward zero |
-  | `floor` | `vrndmq_f32` | toward -inf |
-  | `ceil` | `vrndpq_f32` | toward +inf |
+Each of these is commented at its definition, because each would have been a
+silent behaviour change rather than a compile error:
 
-  A function called `round` invites `vrndaq_f32`, which would silently change
-  `sin`, `cos`, `exp` and `tgamma` through their argument reduction. Use
-  `vrndnq_f32` to match the baseline; see TODO item 3 before deciding
-  otherwise.
-- **`gather`** has no NEON equivalent; emulate with scalar loads. This is on
-  the hot path of the generated `erf`/`tgamma`/`asin` code, so it is the most
-  likely place for the speedup column to regress.
-- **`permute`** (`_mm256_permutevar8x32_ps`) becomes a 4-lane `vqtbl1q_u8`
-  table lookup with byte-index expansion. `simd_f64::permute` already uses
-  `__builtin_shuffle`, which ports for free.
-- **`_mm256_mul_epi32`**, used for `simd_i32::operator*`, is a 32x32->64
-  even-lane multiply, not a lane-wise int32 multiply -- `_mm256_mullo_epi32`
-  is the lane-wise one. It appears unused by the math paths, so the NEON
-  version should implement the *intended* `vmulq_s32` and the discrepancy
-  should be noted in the commit rather than faithfully reproduced.
+- **`vminq_f32`/`vmaxq_f32` implement IEEE minNum/maxNum**, returning the
+  non-NaN operand. `_mm256_min_ps` is a plain `a < b ? a : b`, which returns
+  `b` when either operand is NaN. Written as the select.
+- **`vrndnq_f32` is ties-to-even** and matches `_MM_FROUND_TO_NEAREST_INT`.
+  `vrndaq_f32` is ties-away, which is what C's `round` means and what the
+  caller's name suggests -- and would have changed `sin`, `cos`, `exp` and
+  `tgamma` through their argument reduction. See TODO item 3.
+- **`_CMP_NEQ_OS` is ordered**, so a NaN operand compares false. Negating
+  `vceqq` alone gives true there, so it is masked with "both operands ordered".
+- **`blendv` tests the sign bit**, not whether the lane is nonzero.
+- **The right shifts are logical** despite the signed element type.
+- **`i32_mul` reproduces `_mm256_mul_epi32`'s even-lane 32x32->64 behaviour**
+  rather than correcting it, so the backends agree and the baseline stays a
+  clean oracle. Changing it is a separate decision affecting both.
 
-**Then the width fallout:** the codegen packing (section 1 above),
-`N_bit_shift` and the `posix_memalign(..., 32, ...)` calls in `src/test.cpp`.
-`CHECK_ALIGNMENT` (section 2) was already dealt with in Phase 1.
+### The generator, parameterised on the lane count
 
-Note that Phase 1's FMA workaround goes away here: a native backend calls
-`vfmaq_f32`/`vfmaq_f64` directly, so the fusion is explicit rather than
-something to be checked for. The semantics probe's `fma exactness` section is
-what catches a regression.
+All three predicted functions needed it, and the third was worse than expected:
 
-**Validation:** rebuild **both** probes and diff against
-`baseline/x86/golden.txt` and `baseline/x86/semantics.txt`. Diffing only the
-golden dump is not sufficient: it is built from random samples, so behaviour
-that differs on special values -- rounding ties, signed zero, NaN, denormals --
-can change without moving a single line of it. `semantics.txt` is the file that
-pins those, and it is where a wrong rounding-mode choice (see TODO item 3) or
-a lost comparison negation would surface.
+- `erf(simd_f32)` packs 4 branches per coefficient index, so a vector holds
+  `size()/4` of them -- 2 on AVX2, 1 on NEON.
+- `asin(simd_f32)` packs 2, so `size()/2` -- 4 on AVX2, 2 on NEON. Fixing it
+  also fixed `atan`, which is built on it.
+- `asin(simd_f64)` indexes a table with one row per lane mask: `2^lanes` rows
+  of `lanes` wide, 4x2 here against 16x4 on x86. **It had been producing
+  correct answers by accident.** Only the first 4 of the 16 rows are reachable
+  with two lanes and they happen to hold the right values, while each row's
+  4-wide initialiser was writing past its array element. Correct output,
+  out-of-bounds writes -- the kind of thing no amount of diffing finds.
 
-Correctness is only half of it. Diff both files **and** compare speed, by
-building the two commits and running `simd_test` back to back in the same
-session -- never against the speed column of a committed baseline, which
-varies with machine state (TODO item 9). A union added in Phase 1 for SIMDe's
-benefit cost 2.5x on x86 and survived two phases of correctness-only checks.
+`simd_i64`'s bitwise operators were calling the `i32` primitives. That is
+invisible on x86, where both integer vectors are `__m256i`, and a compile error
+on NEON, where they are not -- the naming scheme doing its job.
 
-Both comparisons assume the **same commit and the same compiler flags** on both
-sides. Results depend on FMA contraction, and contraction is an optimiser
-decision that any flag change can perturb -- see TODO item 8. A golden diff
-after changing flags means re-baseline and check `simd_test`; a golden diff
-across architectures at fixed flags means a bug.
+`src/test.cpp` needed no change: `posix_memalign` at 32 bytes is valid for
+16-byte types, and `N_bit_shift` simply means AArch64 samples half as many
+points, which is ample.
 
-The per-element output format means the 4-lane ARM run and the 8-lane x86 run
-produce directly comparable files. Lane-masking and FMA contraction
-differences show up as small ULP deltas -- expected; large ones are bugs. The
-FNV summary at the end of the dump tells you which functions to look at
-before reading 20k lines of hex.
+**The generated `math.cpp` is now backend-specific**, since `codegen.cpp` reads
+the lane count from the type it was compiled against. Switching backends
+requires a rebuild, which the dependency on `simd_codegen` already forces.
 
 ## Phase 3 -- SVE (optional)
 
@@ -400,9 +383,10 @@ just a backend change.
 | -1 | x86 baseline capture | done |
 | 0 | CMake: find mpfr/gmp, arch-conditional flags; README | done |
 | 1 | SIMDe: swap header, union layout, `reduce_sum`, FMA fusion | done |
-| 2 | Native NEON: 4 classes, 70 intrinsics, codegen re-parameterisation | the bulk |
+| 2 | Native NEON: backend, codegen re-parameterisation | done |
 | 3 | SVE | defer |
 
-Phases -1 to 1 are complete: there is a correct, tested ARM build, making no
-speedup claim. Phase 2 is where performance arrives, and it is the only phase
-that touches the code generator.
+Phases -1 to 2 are complete. There is a native AArch64 build that reproduces
+the x86 reference bit-for-bit except `rsqrt`, and runs 1.65x faster than the
+SIMDe one. What remains is optional: SVE on wider hardware, and the deferred
+items in TODO.md.

@@ -318,3 +318,28 @@ into precisely the comparison the port depends on. The file therefore records
 what *both* architectures produced before item 7 and what AArch64 still
 produces; x86 at HEAD differs from it as described above. Re-capture once the
 port is finished and the oracle has done its job.
+
+## 11. `blend` disagrees between backends for a mask of `INT_MIN`
+
+`baseline/x86/semantics.txt` against `baseline/aarch64-neon/semantics.txt`:
+
+```
+mask=-2147483648  x86  f32 -> 20.0     NEON  f32 -> 10.0
+```
+
+Every other mask in the probe agrees, including `0`, `1`, `-1`, `2`, `-2` and
+`INT_MAX`. `blend` resolves its mask as `mask = -mask` followed by a sign-bit
+select, and `-INT_MIN` is not representable: on x86 it wraps back to `INT_MIN`
+with the sign bit still set, selecting `b`, while on NEON the result leaves the
+sign bit clear and selects `a`.
+
+Not reachable from anything: the library and all generated code pass `0` or `1`
+here, and the probe includes the extreme values only to characterise the
+behaviour. Recorded because it is a genuine semantic difference between the
+backends rather than a rounding artefact, and because the `-mask` idiom is the
+sort of thing that gets copied.
+
+If it is ever worth fixing, the clean form is a comparison against zero rather
+than a negation — `mask != 0` — which has no representability edge. That would
+change `blend`'s behaviour for every mask outside `{0, 1}`, so it is a
+deliberate semantic change to both backends, not a port fix.

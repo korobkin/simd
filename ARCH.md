@@ -1,10 +1,12 @@
 # Architecture support
 
 > **Status.** The survey below describes the situation before the AArch64 port
-> started. As of Phase 1 the library builds and runs on AArch64 through SIMDe,
-> reproducing the x86 reference dump bit-for-bit except `rsqrt`. A native NEON
-> backend is Phase 2. See [PORT-AARCH64.md](PORT-AARCH64.md); the analysis here
-> is kept because it is still the reasoning behind that plan.
+> started. The port is now done: the library builds and runs on AArch64 with a
+> native NEON backend, reproducing the x86 reference dump bit-for-bit except
+> `rsqrt`, and about 1.65x faster than the SIMDe route it went through first.
+> See [PORT-AARCH64.md](PORT-AARCH64.md); the analysis here is kept because it
+> is still the reasoning behind that plan. Of the four options it lists, the
+> port used 1 (SIMDe) as a stepping stone and landed on 3 (native NEON).
 
 Originally this library was x86_64-only. `include/simd.hpp` includes `<immintrin.h>` and
 uses 32 `__m256`/`__m128` types and ~150 `_mm*` intrinsics, with no alternative
