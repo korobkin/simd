@@ -49,12 +49,15 @@ To install, use the standard cmake procedure:
    make
 ```
 
-If gmp and mpfr live outside the default search path -- in a conda environment,
-say -- point CMake at the prefix:
+If gmp and mpfr live outside the default search path, point CMake at the
+prefix:
 
 ```bash
    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/path/to/prefix
 ```
+
+An activated conda environment is picked up automatically through
+`CONDA_PREFIX`, so that flag is usually unnecessary there.
 
 This will create an executable `simd_test`. If you run it, it should
 display the results like this:

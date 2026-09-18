@@ -57,6 +57,15 @@ message(STATUS "simd: architecture flags: ${SIMD_ARCH_FLAGS}")
 # prefix (a conda environment, a local install) can be selected with
 # -DCMAKE_PREFIX_PATH=... . Only the code generator and the test need them; the
 # simd library itself does not.
+# An active conda environment is a common place for these to live, and having
+# to pass -DCMAKE_PREFIX_PATH on every fresh build tree is pure friction. Only
+# consulted when the variable is set, and an explicit CMAKE_PREFIX_PATH still
+# takes precedence because it is searched first.
+if(DEFINED ENV{CONDA_PREFIX})
+	list(APPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
+	message(STATUS "simd: also searching CONDA_PREFIX: $ENV{CONDA_PREFIX}")
+endif()
+
 find_path(MPFR_INCLUDE_DIR NAMES mpfr.h)
 find_library(MPFR_LIBRARY NAMES mpfr)
 find_path(GMP_INCLUDE_DIR NAMES gmp.h)
@@ -72,7 +81,9 @@ if(NOT MPFR_INCLUDE_DIR OR NOT MPFR_LIBRARY OR NOT GMP_INCLUDE_DIR OR NOT GMP_LI
 		"  libgmp: ${GMP_LIBRARY}\n"
 		"Install them (libmpfr-dev and libgmp-dev on Debian/Ubuntu) or point "
 		"CMake at an existing prefix, e.g.\n"
-		"  cmake .. -DCMAKE_PREFIX_PATH=/path/to/prefix"
+		"  cmake .. -DCMAKE_PREFIX_PATH=/path/to/prefix\n"
+		"An activated conda environment (CONDA_PREFIX) is searched "
+		"automatically."
 	)
 endif()
 message(STATUS "simd: mpfr: ${MPFR_LIBRARY}")
