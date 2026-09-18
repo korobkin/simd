@@ -27,6 +27,11 @@
 #include <simde/x86/fma.h>
 #define SIMD_BACKEND_NAME "SIMDe/AVX2"
 #define SIMD_BACKEND_SIMDE 1
+/* simde__m256 is a union type and cannot be subscripted, so the float classes
+   must reach their lanes through a union of their own. The native backend must
+   NOT do that: adding an array member alongside the vector stops GCC keeping
+   the object in a register, and measured 2.5x slower on x86. */
+#define SIMD_BACKEND_LANE_UNION 1
 #endif
 
 namespace simd {

@@ -294,10 +294,22 @@ inline simd_i32 min(simd_i32 a, simd_i32 b) {
 }
 
 class simd_f32 {
+#if defined(SIMD_BACKEND_LANE_UNION)
+	/* Only where the backend's vector type cannot be subscripted. On the
+	   native backend the bare member is essential: adding the array alongside
+	   it defeats GCC's register promotion of this class and measured 2.5x
+	   slower on x86. See PORT-AARCH64.md. */
 	union {
 		backend::f32v v;
 		float w[backend::f32_lanes];
 	};
+	inline float& lane(int i) { return w[i]; }
+	inline float lane(int i) const { return w[i]; }
+#else
+	backend::f32v v;
+	inline float& lane(int i) { return v[i]; }
+	inline float lane(int i) const { return v[i]; }
+#endif
 public:
 	simd_f32() = default;
 	simd_f32(const simd_f32&) = default;
@@ -306,11 +318,11 @@ public:
 	simd_f32& operator=(simd_f32&&) = default;
 	inline float operator[](int i) const {
 		CHECK_ALIGNMENT(this, 32);
-		return w[i];
+		return lane(i);
 	}
 	inline float& operator[](int i) {
 		CHECK_ALIGNMENT(this, 32);
-		return w[i];
+		return lane(i);
 	}
 	inline simd_f32(float a) {
 		CHECK_ALIGNMENT(this, 32);
@@ -320,7 +332,7 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		int i = 0;
 		for (auto j = list.begin(); j != list.end(); j++) {
-			w[i++] = *j;
+			lane(i++) = *j;
 		}
 	}
 	inline simd_f32(const simd_i32& other) {
@@ -433,7 +445,7 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		const int& e = size();
 		for (int i = n; i < e; i++) {
-			w[i] = w[0];
+			lane(i) = lane(0);
 		}
 		return *this;
 	}
@@ -450,7 +462,7 @@ public:
 	inline void set_NaN() {
 		CHECK_ALIGNMENT(this, 32);
 		for (int i = 0; i < size(); i++) {
-			w[i] = std::numeric_limits<float>::signaling_NaN();
+			lane(i) = std::numeric_limits<float>::signaling_NaN();
 		}
 	}
 	friend simd_f32 rint(simd_f32 x);
@@ -612,7 +624,7 @@ inline float reduce_sum(simd_f32 x) {
 	constexpr int H = backend::f32_lanes / 2;
 	float a[H];
 	for (int i = 0; i < H; i++) {
-		a[i] = x.w[i] + x.w[i + H];
+		a[i] = x.lane(i) + x.lane(i + H);
 	}
 	float s = a[0];
 	for (int i = 1; i < H; i++) {
@@ -978,10 +990,22 @@ public:
 
 
 class simd_f64 {
+#if defined(SIMD_BACKEND_LANE_UNION)
+	/* Only where the backend's vector type cannot be subscripted. On the
+	   native backend the bare member is essential: adding the array alongside
+	   it defeats GCC's register promotion of this class and measured 2.5x
+	   slower on x86. See PORT-AARCH64.md. */
 	union {
 		backend::f64v v;
 		double w[backend::f64_lanes];
 	};
+	inline double& lane(int i) { return w[i]; }
+	inline double lane(int i) const { return w[i]; }
+#else
+	backend::f64v v;
+	inline double& lane(int i) { return v[i]; }
+	inline double lane(int i) const { return v[i]; }
+#endif
 public:
 	simd_f64() = default;
 	simd_f64(const simd_f64&) = default;
@@ -990,11 +1014,11 @@ public:
 	simd_f64& operator=(simd_f64&&) = default;
 	inline double operator[](int i) const {
 		CHECK_ALIGNMENT(this, 32);
-		return w[i];
+		return lane(i);
 	}
 	inline double& operator[](int i) {
 		CHECK_ALIGNMENT(this, 32);
-		return w[i];
+		return lane(i);
 	}
 	inline simd_f64(double a) {
 		CHECK_ALIGNMENT(this, 32);
@@ -1004,15 +1028,15 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		int i = 0;
 		for (auto j = list.begin(); j != list.end(); j++) {
-			w[i++] = *j;
+			lane(i++) = *j;
 		}
 	}
 	inline simd_f64(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		w[0] = (double) other[0];
-		w[1] = (double) other[1];
-		w[2] = (double) other[2];
-		w[3] = (double) other[3];
+		lane(0) = (double) other[0];
+		lane(1) = (double) other[1];
+		lane(2) = (double) other[2];
+		lane(3) = (double) other[3];
 	}
 	inline simd_f64 permute(simd_i64 indices) const {
 		CHECK_ALIGNMENT(this, 32);
@@ -1021,7 +1045,7 @@ public:
 		   modulo the lane count as the builtin does. */
 		simd_f64 result;
 		for (int k = 0; k < (int) size(); k++) {
-			result.w[k] = w[indices[k] & (backend::f64_lanes - 1)];
+			result.lane(k) = lane(indices[k] & (backend::f64_lanes - 1));
 		}
 		return result;
 	}
@@ -1125,7 +1149,7 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		const int& e = size();
 		for (int i = n; i < e; i++) {
-			w[i] = w[0];
+			lane(i) = lane(0);
 		}
 		return *this;
 	}
@@ -1142,7 +1166,7 @@ public:
 	inline void set_NaN() {
 		CHECK_ALIGNMENT(this, 32);
 		for (int i = 0; i < size(); i++) {
-			w[i] = std::numeric_limits<double>::signaling_NaN();
+			lane(i) = std::numeric_limits<double>::signaling_NaN();
 		}
 	}
 	friend simd_f64 rint(simd_f64 x);
@@ -1724,7 +1748,7 @@ inline double reduce_sum(simd_f64 x) {
 	constexpr int H = backend::f64_lanes / 2;
 	double a[H];
 	for (int i = 0; i < H; i++) {
-		a[i] = x.w[i] + x.w[i + H];
+		a[i] = x.lane(i) + x.lane(i + H);
 	}
 	double s = a[0];
 	for (int i = 1; i < H; i++) {
