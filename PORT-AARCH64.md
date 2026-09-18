@@ -69,57 +69,69 @@ AVX512DQ + AVX512VL. The build only works today because `-march=native` happens
 to enable it on the developer's machine; `-mavx2` alone would not compile it.
 Worth knowing before assuming the x86 build is a clean AVX2 baseline.
 
-## A semantics problem to settle first
+## Semantics the port must reproduce
 
-The codebase is written throughout as though comparisons return **1**, but the
-intrinsics it uses return **all-ones (-1)**. Both conventions appear, sometimes
-two lines apart in the same generated function:
+The x86 baseline settles this empirically; see
+[baseline/x86/semantics.txt](baseline/x86/semantics.txt).
 
-```c
-/* codegen.cpp:482-483, inside one function */
-r   = blend(r, simd_f32(1) - r, r > simd_f32(0.5));              /* -1 */
-sgn = blend(simd_f32(-1), simd_f32(1), simd_i32(floor(x0)) & 1); /*  1 */
-```
+**Comparisons return 1 or 0, never -1.** Every one of the sixteen comparison
+operators ends with `return -result;`, negating the all-ones mask the intrinsic
+produces. So the convention is uniform, `blend` agrees with it (a mask of `1`
+selects `b`), and the operators built on top -- `simd_i32::operator>=` as
+`((==) + (>)) > 0`, `fdim` as `(x > y) * (x - y)` -- work as written.
 
-`blend` resolves its mask as `mask = -mask` then `_mm256_blendv_ps`, which
-tests the sign bit -- so a mask of `1` selects `b` and a mask of `-1` selects
-`a`. The two lines above therefore disagree about what "true" means.
+This matters for the port because **it is not automatic on NEON either**.
+`vceqq_f32` and friends also yield all-ones, so the negation has to be carried
+across deliberately. Getting it wrong flips every branch in the generated code
+at once, which is the kind of failure that shows up as uniformly absurd ULP
+columns rather than as a subtle regression.
 
-The same assumption shows up in the scalar operator definitions, which only
-work with a 1/0 convention:
+`blend` needs equal care. It resolves its mask as `mask = -mask` followed by a
+sign-bit select, so the useful range is `0`/`1` but the *observed* behaviour
+for other values is whatever the sign bit says -- the probe records `2` as
+true and `-2` as false. A NEON `vbslq_f32` takes a full-width mask, so the
+port has to build one (negate, then broadcast the sign bit) rather than pass
+the integer straight through.
 
-```c
-simd_i32::operator>=  ->  ((*this == other) + (*this > other)) > simd_i32(0)
-simd_i32::operator!=  ->  simd_i32(1) - (*this == other)
-fdim(x, y)            ->  (x > y) * (x - y)
-nextafter             ->  i += (y - x > simd_f32(0))
-```
+**NaN comparisons return 0, including `!=`.** The intrinsics use the ordered
+predicates, so every comparison against a NaN is false, and negating false
+gives 0. IEEE would have `!=` be true. The library depends on the current
+behaviour -- `nextafter` detects a NaN with `!(y == y)` precisely because
+`y != y` does not work here -- so the port must reproduce it rather than
+quietly adopt the IEEE reading.
 
-With `==` returning -1, `>=` on equal operands evaluates `-1 > 0` -> false, and
-`fdim` returns the negated difference.
+**Two primitives behave unexpectedly, confirmed by the probe:**
 
-This is not an ARM issue -- it is there on x86 -- but it lands in the middle of
-the port, because a NEON rewrite has to pick a convention, and picking one
-silently changes results. **Decide it before porting, not during.** The
-recommendation is to standardise on 1/0 (it matches `blend`, and it is what
-every operator above already assumes), and to do it as a separate,
-clearly-labelled commit on x86 semantics so the change is not entangled with
-the architecture work.
+- `simd_i32::operator*` uses `_mm256_mul_epi32`, a 32x32->64 even-lane
+  multiply. The probe shows lanes 1, 3, 5 and 7 coming back as zero. It
+  appears unused by the math paths. The NEON version should implement the
+  intended lane-wise `vmulq_s32` and say so in the commit, rather than
+  faithfully reproducing a result nobody can want.
+- `operator>>` is a *logical* shift despite `simd_i32` being signed
+  (`_mm256_srlv_epi32` / `_mm256_srli_epi32`): `(-8) >> 3` gives 536870911.
+  Several bit-manipulation routines in the header rely on this. NEON's
+  `vshlq_s32` is arithmetic, so the port must use the unsigned form to match.
+
+[TODO.md](TODO.md) is the register for defects found and deliberately not
+fixed -- currently `ilogb` for negative inputs and `round` being half-to-even
+rather than half-away-from-zero. Reproduce them on ARM or fix them on x86
+first, but do not let a port silently change them: a mismatch against
+`golden.txt` should always have a known cause.
 
 ## Strategy
 
-An x86_64 machine is available, so the reference run ARCH.md asks for can be
-captured directly. [ARCH.md](ARCH.md#capturing-an-x86-baseline) has the
-procedure and [tools/baseline/](tools/baseline/) has the two probe programs.
-Do that first -- it is cheap, and everything below is validated against it.
+The reference run ARCH.md asks for **has been captured**; it is in
+[baseline/x86/](baseline/x86/), from an i5-1135G7 under GCC 11.4. Everything
+below is validated against it.
 
-Note that `simd_test` alone does not suffice as that reference: it seeds from
+`simd_test` alone does not suffice as that reference: it seeds from
 `time(NULL)` ([test.cpp:1229](src/test.cpp#L1229)) so it is not reproducible,
 it reports only aggregate ULP, and it never exercises the comparison/mask/
 permute/gather layer that a NEON port actually rewrites. Hence the two extra
-probes: `semantics.txt` (primitive conformance, settles the 1-vs-`-1`
-question empirically) and `golden.txt` (bit-exact output on fixed inputs,
-printed per scalar element so an 8-lane and a 4-lane run diff directly).
+probes: `semantics.txt` (primitive conformance, which is what settled the
+comparison convention above) and `golden.txt` (bit-exact output on fixed
+inputs, printed per scalar element so an 8-lane and a 4-lane run diff
+directly, with an FNV summary per function to localise a mismatch).
 
 With the baseline in hand, the sequencing question is whether to go straight
 to native NEON or via SIMDe first.
@@ -136,7 +148,7 @@ downstream depends on this library.
 **The case against: it is a phase you throw away.** With a golden dump from
 x86 there is a usable oracle regardless, so SIMDe is no longer load-bearing --
 it is a risk-reduction step, not a necessity. If the appetite is for one
-focused push rather than two, going straight to Phase 3 is defensible; the
+focused push rather than two, going straight to Phase 2 is defensible; the
 cost is that a failing ULP column could be either an intrinsic translation bug
 or a width bug, with no cheap way to tell them apart.
 
@@ -146,12 +158,11 @@ part of the port to debug -- and SIMDe lets every other piece be proven
 correct before touching it. But this is a judgement call, not a constraint.
 
 ```
-Phase -1  x86 baseline capture   -> on the x86 machine; see ARCH.md
+Phase -1  x86 baseline capture   -> DONE; baseline/x86/
 Phase 0   build unblock          -> cmake configures and builds on ARM
 Phase 1   SIMDe backend          -> correct ARM build, AVX2 lane counts
-Phase 2   semantics fix          -> settle the 1/0 convention
-Phase 3   native NEON backend    -> diffed against baseline/x86/golden.txt
-Phase 4   SVE (optional)         -> only worthwhile on wider hardware
+Phase 2   native NEON backend    -> diffed against baseline/x86/golden.txt
+Phase 3   SVE (optional)         -> only worthwhile on wider hardware
 ```
 
 ## Phase 0 -- build unblock
@@ -211,15 +222,7 @@ very closely -- `rsqrt` is the expected exception (reciprocal estimate
 instructions are implementation-defined). Any other mismatch is a SIMDe
 coverage gap worth understanding before moving on.
 
-## Phase 2 -- semantics fix
-
-With a runnable build in hand, settle the comparison convention described
-above. Add a small conformance test (not the ULP sweep -- a direct assertion on
-`==`, `!=`, `<`, `>=`, `blend`, `fdim`, `nextafter` for known inputs) so the
-convention is pinned by a test rather than by reading. Expect some ULP columns
-to *improve*; that is the signal the fix is right.
-
-## Phase 3 -- native NEON backend
+## Phase 2 -- native NEON backend
 
 Only now does the width change. The work:
 
@@ -262,7 +265,7 @@ differences show up as small ULP deltas -- expected; large ones are bugs. The
 FNV summary at the end of the dump tells you which functions to look at
 before reading 20k lines of hex.
 
-## Phase 4 -- SVE (optional)
+## Phase 3 -- SVE (optional)
 
 Not worthwhile on this machine (128-bit VL). Revisit on Neoverse V1/V2, Grace,
 or Graviton3+, where the vector is 256 bits or wider. Note that vector-length
@@ -274,13 +277,12 @@ just a backend change.
 
 | Phase | Scope | Rough cost |
 |---|---|---|
-| -1 | x86 baseline capture (on the x86 box) | small |
+| -1 | x86 baseline capture | done |
 | 0 | CMake: find mpfr/gmp, arch-conditional flags; README | small |
 | 1 | SIMDe: swap header, union layout, `reduce_sum`, verify coverage | moderate |
-| 2 | Comparison convention + conformance test | small, but needs a decision |
-| 3 | Native NEON: 4 classes, 70 intrinsics, codegen re-parameterisation | the bulk |
-| 4 | SVE | defer |
+| 2 | Native NEON: 4 classes, 70 intrinsics, codegen re-parameterisation | the bulk |
+| 3 | SVE | defer |
 
-Phases -1 to 2 give a correct, tested ARM build with no speedup claim. Phase 3 is
+Phases -1 to 1 give a correct, tested ARM build with no speedup claim. Phase 2 is
 where performance arrives, and it is the only phase that touches the code
 generator.

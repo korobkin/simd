@@ -81,10 +81,11 @@ Ordered by effort.
 # Capturing an x86 baseline
 
 The last note above says to compare ULP columns against a known-good x86 run.
-This section is the concrete procedure. **Run it on the x86 machine, on an
-unmodified checkout, before any porting work starts.** The artifacts it
-produces are what the AArch64 port is validated against; see
-[PORT-AARCH64.md](PORT-AARCH64.md) for how they are used.
+This section is the concrete procedure. **It has been run** -- the artifacts
+are in `baseline/x86/` and are what the AArch64 port is validated against; see
+[PORT-AARCH64.md](PORT-AARCH64.md) for how they are used. The procedure is
+kept because the baseline has to be re-captured whenever a fix changes
+behaviour on x86.
 
 ## Why `simd_test` output is not enough
 
@@ -169,24 +170,32 @@ g++ -O2 -std=c++20 -DNDEBUG -march=native -mavx2 -Iinclude \
 git add baseline/x86 && git commit -m "baseline: x86_64 reference run"
 ```
 
-## Notes for the session running this
+## Notes for re-running this
 
-- **The two probe programs were written on the ARM machine and have never been
-  compiled**, because `simd.hpp` does not build there at all. Compile errors
-  are expected and are yours to fix. Keep the fixes minimal and mechanical
-  (a wrong overload, a missing cast); if a probe references something that
-  does not exist in the API, delete that probe and say so rather than
-  inventing a replacement.
-- **Do not "fix" anything in `include/` or `src/` while doing this.** The
-  point is to record the current behaviour, including the parts that look
-  wrong. In particular `semantics.txt` is *expected* to show comparison
-  operators returning `-1` while `blend` treats `1` as true, and
-  `simd_i32::operator*` behaving as an even-lane 32x32->64 multiply. Those are
-  the findings, not bugs to repair in this pass.
-- **Report, don't just commit.** Alongside the artifacts, summarise: did
-  everything build cleanly; what does `semantics.txt` say the comparison
-  convention actually is; does `env.txt` show AVX512DQ/VL (i.e. was
-  `_mm256_cvtpd_epi64` compiled natively or would a plain-AVX2 machine have
-  failed); and did any `simd_test` function show a suspiciously large max ULP.
+- **Do not "fix" anything in `include/` or `src/` in the same pass.** The point
+  is to record current behaviour, including the parts that look wrong; record
+  them in [TODO.md](TODO.md) instead. If a fix does land, re-capture the
+  affected artifact in its own commit and say which files changed, so the
+  reference the port is diffed against never drifts silently.
 - If `simd_test` is OOM-killed, lower `N_bit_shift` (`src/test.cpp:145`) and
   note the value used in `simd_test.txt`.
+
+## What the first run established
+
+Run on an i5-1135G7 (Tiger Lake), GCC 11.4, at commit `7522374`.
+
+- **Comparisons return 1 or 0, never -1.** All sixteen comparison operators end
+  with `return -result;`. `blend` agrees, and the operators built on top of
+  them work as written. There is no inconsistency here, contrary to what was
+  suspected from reading the intrinsics alone.
+- **NaN compares false everywhere, `!=` included**, since the ordered
+  predicates are used. Code in the header depends on this.
+- **`-march=native` enabled AVX512DQ and AVX512VL** on this machine, so
+  `_mm256_cvtpd_epi64` (`simd.hpp:1230`) compiled natively. A plain-AVX2 host
+  would not have built it -- the AVX2-only claim in this file's opening is
+  optimistic.
+- **`simd_i32::operator*` really is an even-lane multiply** (lanes 1, 3, 5, 7
+  come back zero), and **`operator>>` is a logical shift on a signed type**
+  (`(-8) >> 3` gives 536870911).
+- Four findings were set aside into [TODO.md](TODO.md); one of them,
+  `nextafter`, has since been fixed and the baseline re-captured.
