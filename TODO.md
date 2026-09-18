@@ -216,3 +216,62 @@ perturb.
 
 This is not ARM-specific. The same UB is in the x86 build; it simply has not
 been triggered there yet.
+
+## 8. Results depend on FMA contraction, so `golden.txt` is not stable across recompiles
+
+Measured on AArch64, toggling `-ffp-contract` changes the output of **33 of the
+48** functions in the golden dump. Contraction is not optional here — it is
+load-bearing for accuracy:
+
+| | `fast` | `off` |
+|---|---|---|
+| f32 `exp` | 4 ULP | **68 ULP** |
+| f32 `erfc` | 9 ULP | **71 ULP** |
+| f32 `cosh` | 2 ULP | 10 ULP |
+| f32 `sinh` | 3 ULP | 9 ULP |
+
+`-ffp-contract=fast` is now pinned explicitly on the `simd` target rather than
+inherited from GCC's default, since Clang and some distributions default
+differently and would silently lose that accuracy.
+
+The consequence matters for how the baseline is used. Whether a given `a*b + c`
+gets contracted is an optimiser decision, and anything that perturbs the
+optimiser can change it — which is how adding `-fno-strict-aliasing` (item 7)
+shifted about ten x86 functions by 1-2 ULP without any source change to them.
+
+So `baseline/x86/golden.txt` is a bit-exact oracle **across architectures at a
+fixed commit and fixed flags**, which is what the port needs it for. It is
+*not* a regression test across compiler-flag or structural changes; those
+require re-capturing it, with `simd_test` as the arbiter of whether accuracy
+actually moved. Treat a golden diff after a flag change as "re-baseline and
+check ULP", and a golden diff after an architecture change as "a bug".
+
+## 9. The validation routine had no performance check
+
+Phase 1 gave `simd_f32`/`simd_f64` a `union { __m256 v; float w[8]; }` so that
+lanes could be reached under SIMDe, whose vector type cannot be subscripted.
+That union costs **2.5x on x86**: the array member stops GCC promoting the
+class to a vector register, and the generated Horner chains have dozens of
+live temporaries, so they spill. AArch64 has 32 vector registers and absorbed
+it, which is why it went unnoticed there.
+
+Measured on the x86 machine, f32 `asin` speedup: 4.27x at `7522374`
+(pre-port), 4.20x at `6f67320` (Phase 0), 1.71x at `92d16ca` (Phase 1). Fixed
+by making the union conditional on `SIMD_BACKEND_LANE_UNION`, which only the
+SIMDe backend defines; the native backend keeps the bare member and reaches
+lanes through `lane()`, exactly as before the port.
+
+**The real defect is the validation routine, not the union.** The standard
+check after every change had been three diffs -- `math.cpp`, `golden.txt`,
+`semantics.txt` -- all of which are correctness-only. A 2.5x regression sat
+undetected across two phases and was found only because a golden diff prompted
+a `simd_test` run for an unrelated reason.
+
+Add a speed check, with one caveat that makes it easy to get wrong: **the
+speed column is not comparable against a committed file.** It is a ratio of two
+timings taken sequentially in one process on random inputs, and it varies with
+machine state -- the same machine produced 1.7x and 4.2x on the same commit at
+different moments. Compare A against B by building both commits and running
+them back to back in the same session, never against
+`baseline/x86/simd_test.txt`. The accuracy columns of that file are stable and
+comparable; the speed column is not, and is kept only as a rough record.

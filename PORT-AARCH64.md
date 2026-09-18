@@ -367,6 +367,18 @@ can change without moving a single line of it. `semantics.txt` is the file that
 pins those, and it is where a wrong rounding-mode choice (see TODO item 3) or
 a lost comparison negation would surface.
 
+Correctness is only half of it. Diff both files **and** compare speed, by
+building the two commits and running `simd_test` back to back in the same
+session -- never against the speed column of a committed baseline, which
+varies with machine state (TODO item 9). A union added in Phase 1 for SIMDe's
+benefit cost 2.5x on x86 and survived two phases of correctness-only checks.
+
+Both comparisons assume the **same commit and the same compiler flags** on both
+sides. Results depend on FMA contraction, and contraction is an optimiser
+decision that any flag change can perturb -- see TODO item 8. A golden diff
+after changing flags means re-baseline and check `simd_test`; a golden diff
+across architectures at fixed flags means a bug.
+
 The per-element output format means the 4-lane ARM run and the 8-lane x86 run
 produce directly comparable files. Lane-masking and FMA contraction
 differences show up as small ULP deltas -- expected; large ones are bugs. The
