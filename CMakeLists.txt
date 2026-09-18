@@ -38,8 +38,8 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 		endif()
 	endif()
 	message(STATUS
-		"simd: AArch64 detected. include/simd.hpp is still x86-only, so the "
-		"build is expected to stop at <immintrin.h>; see PORT-AARCH64.md."
+		"simd: AArch64 detected; building the SIMDe backend (Phase 1). "
+		"See PORT-AARCH64.md."
 	)
 else()
 	message(WARNING
@@ -83,6 +83,40 @@ message(STATUS "simd: gmp:  ${GMP_LIBRARY}")
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
+# --- SIMDe -------------------------------------------------------------------
+# Phase 1 of the AArch64 port (PORT-AARCH64.md): SIMDe reimplements the Intel
+# intrinsics over NEON, keeping the AVX2 lane counts so nothing else has to
+# change yet. x86_64 uses <immintrin.h> and never sees this.
+set(SIMDE_INCLUDE_DIRS "")
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
+	find_path(SIMDE_INCLUDE_DIR NAMES simde/x86/avx2.h)
+	if(NOT SIMDE_INCLUDE_DIR)
+		# Header-only, so populate without adding it as a subproject.
+		include(FetchContent)
+		FetchContent_Declare(simde
+			GIT_REPOSITORY https://github.com/simd-everywhere/simde.git
+			GIT_TAG v0.8.2
+			GIT_SHALLOW TRUE
+		)
+		FetchContent_GetProperties(simde)
+		if(NOT simde_POPULATED)
+			message(STATUS "simd: SIMDe not found locally; fetching v0.8.2")
+			FetchContent_Populate(simde)
+		endif()
+		set(SIMDE_INCLUDE_DIR "${simde_SOURCE_DIR}"
+			CACHE PATH "SIMDe include directory" FORCE)
+	endif()
+	if(NOT SIMDE_INCLUDE_DIR)
+		message(FATAL_ERROR
+			"simd: SIMDe is required on non-x86 targets and could not be found "
+			"or fetched. Install it, or point CMake at a checkout:\n"
+			"  cmake .. -DSIMDE_INCLUDE_DIR=/path/to/simde"
+		)
+	endif()
+	set(SIMDE_INCLUDE_DIRS ${SIMDE_INCLUDE_DIR})
+	message(STATUS "simd: SIMDe: ${SIMDE_INCLUDE_DIR}")
+endif()
+
 set(SIMD_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_code")
 set(SIMD_GENERATED_MATH "${SIMD_GENERATED_DIR}/src/math.cpp")
 
@@ -101,7 +135,9 @@ target_compile_definitions(
 	simd_codegen PRIVATE SIMD_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_compile_options(simd_codegen PRIVATE -O3)
-target_include_directories(simd_codegen PRIVATE ${MPFR_INCLUDE_DIR} ${GMP_INCLUDE_DIR})
+target_include_directories(
+	simd_codegen PRIVATE ${MPFR_INCLUDE_DIR} ${GMP_INCLUDE_DIR} ${SIMDE_INCLUDE_DIRS}
+)
 target_link_libraries(simd_codegen PRIVATE ${MPFR_LIBRARY} ${GMP_LIBRARY} Threads::Threads)
 
 # Regenerated whenever the generator or the sources it splices in change.
@@ -119,7 +155,9 @@ add_custom_command(
 
 add_library(simd ${SIMD_GENERATED_MATH})
 add_library(simd::simd ALIAS simd)
-target_include_directories(simd PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(
+	simd PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${SIMDE_INCLUDE_DIRS}
+)
 target_compile_options(simd PUBLIC ${SIMD_ARCH_FLAGS})
 set_target_properties(simd PROPERTIES PUBLIC_HEADER "include/simd.hpp")
 

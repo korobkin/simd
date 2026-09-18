@@ -1,7 +1,71 @@
 #pragma once
 
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 #include <immintrin.h>
+#else
+/* Phase 1 of the AArch64 port; see PORT-AARCH64.md. SIMDe reimplements the
+   Intel intrinsics on top of NEON and keeps the AVX2 lane counts, so the
+   coefficient packing in src/codegen.cpp, the generated math.cpp and the
+   buffer sizing in src/test.cpp all stay valid. A native NEON backend, where
+   the vector width actually changes, is Phase 2. */
+#define SIMDE_ENABLE_NATIVE_ALIASES
+#include <simde/x86/avx2.h>
+#include <simde/x86/fma.h>
+
+/* SIMDe's 256-bit FMA loses the fusion on NEON, which this library cannot
+   tolerate: simd_f32_2/simd_f64_2 implement double-double arithmetic, whose
+   two_product depends on fma(a,b,-a*b) recovering the exact rounding error.
+   Without a true FMA that residual is zero and the extra precision vanishes,
+   taking acosh, asinh, atanh, tgamma and everything built on them with it.
+
+   Of the four used here only simde_mm256_fmadd_ps delegates to the fused
+   128-bit path; simde_mm256_fmadd_pd, _fmsub_ps and _fmsub_pd all expand to a
+   separate multiply and add, rounding twice. simde_mm_fmsub_ps/pd are not
+   fused either, so only fmadd has a usable 128-bit building block.
+
+   Overridden below. Negation is done by flipping the sign bit rather than
+   subtracting from zero, so that -0 and NaN payloads survive exactly. */
+#undef _mm256_fmadd_pd
+static inline simde__m256d _mm256_fmadd_pd(simde__m256d a, simde__m256d b, simde__m256d c) {
+	return simde_mm256_set_m128d(
+		simde_mm_fmadd_pd(simde_mm256_extractf128_pd(a, 1),
+		                  simde_mm256_extractf128_pd(b, 1),
+		                  simde_mm256_extractf128_pd(c, 1)),
+		simde_mm_fmadd_pd(simde_mm256_extractf128_pd(a, 0),
+		                  simde_mm256_extractf128_pd(b, 0),
+		                  simde_mm256_extractf128_pd(c, 0)));
+}
+
+#undef _mm256_fmsub_pd
+static inline simde__m256d _mm256_fmsub_pd(simde__m256d a, simde__m256d b, simde__m256d c) {
+	return _mm256_fmadd_pd(a, b, simde_mm256_xor_pd(c, simde_mm256_set1_pd(-0.0)));
+}
+
+#undef _mm256_fmsub_ps
+static inline simde__m256 _mm256_fmsub_ps(simde__m256 a, simde__m256 b, simde__m256 c) {
+	/* simde_mm256_fmadd_ps is already fused; only the subtract form is not. */
+	return simde_mm256_fmadd_ps(a, b, simde_mm256_xor_ps(c, simde_mm256_set1_ps(-0.0f)));
+}
+
+#ifndef _mm256_cvtpd_epi64
+/* The one intrinsic used here that SIMDe does not provide: it is AVX512DQ+VL,
+   not AVX2, and compiles on x86 only because -march=native happens to supply
+   it. lround(simd_f64) is the only caller, and it passes a value that
+   _mm256_round_pd has already made an exact integer, so the truncating cast
+   below matches the round-to-nearest the real instruction performs. */
+static inline simde__m256i _mm256_cvtpd_epi64(simde__m256d a) {
+	simde_float64 t[4];
+	int64_t u[4];
+	simde_mm256_storeu_pd(t, a);
+	for (int i = 0; i < 4; i++) {
+		u[i] = (int64_t) t[i];
+	}
+	return simde_mm256_loadu_si256((const void*) u);
+}
+#endif
+#endif
 #include <limits>
+#include <type_traits>
 #include <mutex>
 #include <cfenv>
 #include <cmath>
@@ -11,8 +75,13 @@
 #ifdef NDEBUG
 #define CHECK_ALIGNMENT(ptr, sz)
 #else
+/* The `sz` argument is ignored: every call site passes a literal 32, the AVX2
+   object size, which is wrong wherever the vector type is aligned differently
+   (16 under SIMDe on NEON, and again in a native NEON backend). Taking the
+   alignment from the pointee is correct everywhere and leaves the 128 call
+   sites alone. The parameter is kept so those call sites still compile. */
 #define CHECK_ALIGNMENT(ptr, sz) \
-	if( uintptr_t(ptr) % uintptr_t(sz) != 0 ) { \
+	if( uintptr_t(ptr) % alignof(std::remove_reference_t<decltype(*(ptr))>) != 0 ) { \
 		printf( "Alignment error in %s on line %i!\n", __FILE__, __LINE__ ); \
 		abort(); \
 	}
@@ -280,7 +349,10 @@ inline simd_i32 min(simd_i32 a, simd_i32 b) {
 }
 
 class simd_f32 {
-	__m256 v;
+	union {
+		__m256 v;
+		float w[8];
+	};
 public:
 	simd_f32() = default;
 	simd_f32(const simd_f32&) = default;
@@ -289,11 +361,11 @@ public:
 	simd_f32& operator=(simd_f32&&) = default;
 	inline float operator[](int i) const {
 		CHECK_ALIGNMENT(this, 32);
-		return v[i];
+		return w[i];
 	}
 	inline float& operator[](int i) {
 		CHECK_ALIGNMENT(this, 32);
-		return v[i];
+		return w[i];
 	}
 	inline simd_f32(float a) {
 		CHECK_ALIGNMENT(this, 32);
@@ -303,7 +375,7 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		int i = 0;
 		for (auto j = list.begin(); j != list.end(); j++) {
-			v[i++] = *j;
+			w[i++] = *j;
 		}
 	}
 	inline simd_f32(const simd_i32& other) {
@@ -416,7 +488,7 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		const int& e = size();
 		for (int i = n; i < e; i++) {
-			v[i] = v[0];
+			w[i] = w[0];
 		}
 		return *this;
 	}
@@ -433,7 +505,7 @@ public:
 	inline void set_NaN() {
 		CHECK_ALIGNMENT(this, 32);
 		for (int i = 0; i < size(); i++) {
-			v[i] = std::numeric_limits<float>::signaling_NaN();
+			w[i] = std::numeric_limits<float>::signaling_NaN();
 		}
 	}
 	friend simd_f32 rint(simd_f32 x);
@@ -592,9 +664,10 @@ inline simd_f32 fdim(simd_f32 x, simd_f32 y) {
 }
 
 inline float reduce_sum(simd_f32 x) {
-	__m128 a = *((__m128 *) &x.v);
-	__m128 b = *(((__m128 *) &x.v) + 1);
-	a = _mm_add_ps(a, b);
+	float a[4];
+	for (int i = 0; i < 4; i++) {
+		a[i] = x.w[i] + x.w[i + 4];
+	}
 	return a[0] + a[1] + a[2] + a[3];
 }
 
@@ -928,7 +1001,7 @@ public:
 	inline simd_i64& pad(int n) {
 		const int& e = size();
 		for (int i = n; i < e; i++) {
-			v[i] = v[0];
+			w[i] = w[0];
 		}
 		return *this;
 	}
@@ -945,7 +1018,7 @@ public:
 	inline void set_NaN() {
 		CHECK_ALIGNMENT(this, 32);
 		for (int i = 0; i < size(); i++) {
-			v[i] = std::numeric_limits<int>::signaling_NaN();
+			w[i] = std::numeric_limits<int>::signaling_NaN();
 		}
 	}
 	friend simd_f64 blend(simd_f64, simd_f64, simd_i64);
@@ -955,7 +1028,10 @@ public:
 
 
 class simd_f64 {
-	__m256d v;
+	union {
+		__m256d v;
+		double w[4];
+	};
 public:
 	simd_f64() = default;
 	simd_f64(const simd_f64&) = default;
@@ -964,11 +1040,11 @@ public:
 	simd_f64& operator=(simd_f64&&) = default;
 	inline double operator[](int i) const {
 		CHECK_ALIGNMENT(this, 32);
-		return v[i];
+		return w[i];
 	}
 	inline double& operator[](int i) {
 		CHECK_ALIGNMENT(this, 32);
-		return v[i];
+		return w[i];
 	}
 	inline simd_f64(double a) {
 		CHECK_ALIGNMENT(this, 32);
@@ -978,22 +1054,25 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		int i = 0;
 		for (auto j = list.begin(); j != list.end(); j++) {
-			v[i++] = *j;
+			w[i++] = *j;
 		}
 	}
 	inline simd_f64(const simd_i64& other) {
 		CHECK_ALIGNMENT(this, 32);
-		v[0] = (double) other[0];
-		v[1] = (double) other[1];
-		v[2] = (double) other[2];
-		v[3] = (double) other[3];
+		w[0] = (double) other[0];
+		w[1] = (double) other[1];
+		w[2] = (double) other[2];
+		w[3] = (double) other[3];
 	}
 	inline simd_f64 permute(simd_i64 indices) const {
 		CHECK_ALIGNMENT(this, 32);
+		/* __builtin_shuffle needs a GCC vector type, which SIMDe's simde__m256d
+		   is not. Same semantics: result[k] = v[indices[k]], the index taken
+		   modulo the lane count as the builtin does. */
 		simd_f64 result;
-		__m256i i = indices.v;
-		__m256d y = v;
-		result.v = __builtin_shuffle(v, i);
+		for (int k = 0; k < (int) size(); k++) {
+			result.w[k] = w[indices[k] & 3];
+		}
 		return result;
 	}
 	inline simd_f64& gather(const double* ptr, simd_i64 indices) {
@@ -1096,7 +1175,7 @@ public:
 		CHECK_ALIGNMENT(this, 32);
 		const int& e = size();
 		for (int i = n; i < e; i++) {
-			v[i] = v[0];
+			w[i] = w[0];
 		}
 		return *this;
 	}
@@ -1113,7 +1192,7 @@ public:
 	inline void set_NaN() {
 		CHECK_ALIGNMENT(this, 32);
 		for (int i = 0; i < size(); i++) {
-			v[i] = std::numeric_limits<double>::signaling_NaN();
+			w[i] = std::numeric_limits<double>::signaling_NaN();
 		}
 	}
 	friend simd_f64 rint(simd_f64 x);
@@ -1285,10 +1364,10 @@ inline simd_f64 fma(simd_f64 a, simd_f64 b, simd_f64 c) {
 }
 
 inline simd_i64::simd_i64(const simd_f64& other) {
-	v[0] = (long long) (other[0]);
-	v[1] = (long long) (other[1]);
-	v[2] = (long long) (other[2]);
-	v[3] = (long long) (other[3]);
+	w[0] = (long long) (other[0]);
+	w[1] = (long long) (other[1]);
+	w[2] = (long long) (other[2]);
+	w[3] = (long long) (other[3]);
 }
 
 simd_f64 tgamma(simd_f64);
@@ -1692,9 +1771,10 @@ inline simd_f64 fdim(simd_f64 x, simd_f64 y) {
 }
 
 inline double reduce_sum(simd_f64 x) {
-	__m128d a = *((__m128d *) &x.v);
-	__m128d b = *(((__m128d *) &x.v) + 1);
-	a = _mm_add_pd(a, b);
+	double a[2];
+	for (int i = 0; i < 2; i++) {
+		a[i] = x.w[i] + x.w[i + 2];
+	}
 	return a[0] + a[1];
 }
 
