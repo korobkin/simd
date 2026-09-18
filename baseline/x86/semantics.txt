@@ -85,7 +85,7 @@ x            frexp.m    frexp.e ldexp(x,3) scalbn(x,3) ilogb
 0.1          3f4ccccd   -3     3f4ccccd   3f4ccccd   -4    
 1e-30        3f224260   -99    0f224260   0f224260   -100  
 1e+30        3f49f2ca   100    72c9f2ca   72c9f2ca   99    
--7.25        bf680000   3      c2680000   c2680000   258   
+-7.25        bf680000   3      c2680000   c2680000   2     
 
 ===== copysign / fmin / fmax / abs (hex bits) =====
 a=3.00     b=-1.00    copysign=c0400000 fmin=bf800000 fmax=40400000 fabs=40400000
