@@ -1,0 +1,124 @@
+# simd primitive semantics probe
+
+===== layout =====
+simd_i32: size=8 sizeof=32 alignof=16
+simd_f32: size=8 sizeof=32 alignof=16
+simd_i64: size=4 sizeof=32 alignof=16
+simd_f64: size=4 sizeof=32 alignof=16
+
+===== f32 comparison result values =====
+a              b                  ==     !=      <     <=      >     >=
+1              2                   0      1      1      1      0      0
+2              2                   1      0      0      1      0      1
+2              1                   0      1      0      0      1      1
+-1             1                   0      1      1      1      0      0
+0              -0                  1      0      0      1      0      1
+nan            1                   0      0      0      0      0      0
+1              nan                 0      0      0      0      0      0
+inf            inf                 1      0      0      1      0      1
+
+===== f64 comparison result values =====
+a              b                  ==     !=      <     <=      >     >=
+1              2                   0      1      1      1      0      0
+2              2                   1      0      0      1      0      1
+2              1                   0      1      0      0      1      1
+-1             1                   0      1      1      1      0      0
+nan            1                   0      0      0      0      0      0
+
+===== i32 comparison result values =====
+a        b            ==     !=      <     <=      >     >=
+1        2             0      1      1      1      0      0
+2        2             1      0      0      1      0      1
+2        1             0      1      0      0      1      1
+-1       1             0      1      1      1      0      0
+0        0             1      0      0      1      0      1
+-5       -5            1      0      0      1      0      1
+
+===== blend mask interpretation  blend(10, 20, m) =====
+mask=0            f32 ->  10.0    f64 ->  10.0
+mask=1            f32 ->  20.0    f64 ->  20.0
+mask=-1           f32 ->  10.0    f64 ->  10.0
+mask=2            f32 ->  20.0    f64 ->  20.0
+mask=-2           f32 ->  10.0    f64 ->  10.0
+mask=2147483647   f32 ->  20.0    f64 ->  20.0
+mask=-2147483648  f32 ->  20.0    f64 ->  10.0
+
+===== derived-from-comparison helpers =====
+fdim(5,3)      = 2   (expect 2)
+fdim(3,5)      = 0   (expect 0)
+nextafter(1,2) = 3f800001  (libm 3f800001)
+nextafter(1,0) = 3f7fffff  (libm 3f7fffff)
+
+===== i32 arithmetic, per lane =====
+lane 0: a=1 b=10  a*b=10           a+b=11     a-b=-9     ~a=-2           !a=0
+lane 1: a=2 b=10  a*b=0            a+b=12     a-b=-8     ~a=-3           !a=0
+lane 2: a=3 b=10  a*b=30           a+b=13     a-b=-7     ~a=-4           !a=0
+lane 3: a=4 b=10  a*b=0            a+b=14     a-b=-6     ~a=-5           !a=0
+lane 4: a=5 b=10  a*b=50           a+b=15     a-b=-5     ~a=-6           !a=0
+lane 5: a=6 b=10  a*b=0            a+b=16     a-b=-4     ~a=-7           !a=0
+lane 6: a=7 b=10  a*b=70           a+b=17     a-b=-3     ~a=-8           !a=0
+lane 7: a=8 b=10  a*b=0            a+b=18     a-b=-2     ~a=-9           !a=0
+
+===== i32 shifts =====
+(-8) >> 3 (vector count) = 536870911
+(-8) >> 3 (scalar count) = 536870911
+(-8) << 1 (scalar count) = -16
+note: _mm256_srlv/srli_epi32 are LOGICAL shifts on a signed type
+
+===== rounding, fixed inputs (hex bits) =====
+x        round      rint       trunc      floor      ceil       lround  
+-2.50    c0000000   c0000000   c0000000   c0400000   c0000000   -2      
+-1.50    c0000000   c0000000   bf800000   c0000000   bf800000   -2      
+-0.50    80000000   80000000   80000000   bf800000   80000000   0       
+0.50     00000000   00000000   00000000   00000000   3f800000   0       
+1.50     40000000   40000000   3f800000   3f800000   40000000   2       
+2.50     40000000   40000000   40000000   40000000   40400000   2       
+3.70     40800000   40800000   40400000   40400000   40800000   4       
+-3.70    c0800000   c0800000   c0400000   c0800000   c0400000   -4      
+
+===== exponent manipulation (hex bits) =====
+x            frexp.m    frexp.e ldexp(x,3) scalbn(x,3) ilogb 
+1            3f000000   1      41000000   41000000   0     
+0.5          3f000000   0      40800000   40800000   -1    
+2            3f000000   2      41800000   41800000   1     
+3            3f400000   2      41c00000   41c00000   1     
+0.1          3f4ccccd   -3     3f4ccccd   3f4ccccd   -4    
+1e-30        3f224260   -99    0f224260   0f224260   -100  
+1e+30        3f49f2ca   100    72c9f2ca   72c9f2ca   99    
+-7.25        bf680000   3      c2680000   c2680000   258   
+
+===== copysign / fmin / fmax / abs (hex bits) =====
+a=3.00     b=-1.00    copysign=c0400000 fmin=bf800000 fmax=40400000 fabs=40400000
+a=-3.00    b=1.00     copysign=40400000 fmin=c0400000 fmax=3f800000 fabs=40400000
+a=0.00     b=-1.00    copysign=80000000 fmin=bf800000 fmax=00000000 fabs=00000000
+a=-0.00    b=1.00     copysign=00000000 fmin=80000000 fmax=3f800000 fabs=00000000
+
+===== permute =====
+reverse permute: 107 106 105 104 103 102 101 100
+broadcast lane0: 100 100 100 100 100 100 100 100
+
+===== gather =====
+gather stride2: 0 4 16 36 64 100 144 196
+
+===== reduce_sum =====
+reduce_sum(f32 1..8) = 36
+reduce_sum(f64 1..4) = 10
+
+===== conversions =====
+x=1.90    simd_i32(simd_f32(x))=1     simd_f32(simd_i32(1))=1.0
+x=-1.90   simd_i32(simd_f32(x))=-1    simd_f32(simd_i32(-1))=-1.0
+x=2.50    simd_i32(simd_f32(x))=2     simd_f32(simd_i32(2))=2.0
+x=-2.50   simd_i32(simd_f32(x))=-2    simd_f32(simd_i32(-2))=-2.0
+x=0.40    simd_i32(simd_f32(x))=0     simd_f32(simd_i32(0))=0.0
+
+===== mask / pad =====
+simd_f32::mask(2): 3f800000 3f800000 00000000 00000000 00000000 00000000 00000000 00000000
+simd_i32::mask(2): 1 1 0 0 0 0 0 0
+
+===== fma exactness (double-double building block) =====
+a*b       = 3f800000
+fma(a,b,-p)= b2800000  (exact residual; nonzero for these operands)
+f64 a*b   = 3ff0000000000000
+f64 resid = bc90000000000000
+
+# end
