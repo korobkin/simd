@@ -355,11 +355,11 @@ void float_funcs(FILE* fp) {
 		auto sqrtpi = sqrt(hiprec_real(4) * atan(hiprec_real(1)));
 		fprintf(fp, "\t};\n");
 		fprintf(fp, "\tsimd_f32 y, s, z, x2;\n");
-		fprintf(fp, "\tsimd_i32 l");
+		fprintf(fp, "\tsimd_i32 ");
 		for (int k = 0; k < CPV; k++) {
-			fprintf(fp, ", i%i", k);
+			fprintf(fp, "i%i, ", k);
 		}
-		fprintf(fp, ";\n");
+		fprintf(fp, "l;\n");
 		fprintf(fp, "\ts = copysign(simd_f32(1), x);\n");
 		fprintf(fp, "\tx = fabs(x);\n");
 		fprintf(fp, "\tx2 = x * x;\n");
